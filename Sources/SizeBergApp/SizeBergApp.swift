@@ -4,13 +4,13 @@ import SwiftUI
 @main
 struct SizeBergApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var model = ScanModel()
+    @State private var model = ScanModel()
 
     var body: some Scene {
         WindowGroup("SizeBerg") {
             ContentView()
-                .environmentObject(model)
-                .frame(minWidth: 1100, minHeight: 680)
+                .environment(model)
+                .frame(minWidth: 1000, minHeight: 640)
         }
         .defaultSize(width: 1480, height: 900)
         .commands {
@@ -25,6 +25,19 @@ struct SizeBergApp: App {
                 Button("Clear Cache") { model.clearCache() }
                     .keyboardShortcut("r", modifiers: [.command, .option])
                     .disabled(model.isScanning)
+            }
+            CommandGroup(before: .sidebar) {
+                Button("As List") { model.viewMode = .list }
+                    .keyboardShortcut("1")
+                Button("As Map") { model.viewMode = .map }
+                    .keyboardShortcut("2")
+                Divider()
+                Toggle("Hide Items Under 50 MB", isOn: $model.hideSmall)
+                Divider()
+            }
+            CommandGroup(after: .sidebar) {
+                Button(model.showInspector ? "Hide Inspector" : "Show Inspector") { model.showInspector.toggle() }
+                    .keyboardShortcut("i", modifiers: [.command, .option])
             }
         }
     }
@@ -50,14 +63,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Debug aid: renders the window to a PNG without needing screen recording permission.
+    /// Debug aid: captures the window to a PNG with the system screenshot tool. Liquid Glass and split views
+    /// are drawn by the window server, so copying the view hierarchy leaves them blank.
+    /// Needs screen recording permission for the app that launched SizeBerg, such as the terminal.
     private static func writeSnapshot(to path: String) {
-        // The frame view above the content view draws the window background and toolbar too.
-        guard let content = NSApp.windows.first(where: { $0.isVisible })?.contentView,
-              let view = content.superview,
-              let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
-        view.cacheDisplay(in: view.bounds, to: bitmap)
-        try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        guard let window = NSApp.windows.first(where: { $0.isVisible }),
+              let screenHeight = NSScreen.screens.first?.frame.height else { return }
+        // A window-only capture skips glass layers that the window server composites on its own,
+        // so capture the window's area of the screen with the window in front.
+        window.orderFrontRegardless()
+        let frame = window.frame
+        let region = "\(Int(frame.minX)),\(Int(screenHeight - frame.maxY)),\(Int(frame.width)),\(Int(frame.height))"
+        let capture = Process()
+        capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        capture.arguments = ["-x", "-R", region, path]
+        try? capture.run()
+        capture.waitUntilExit()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

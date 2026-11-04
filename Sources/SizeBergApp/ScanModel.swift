@@ -3,30 +3,60 @@ import SizeBergCore
 import SwiftUI
 
 @MainActor
-final class ScanModel: ObservableObject {
+@Observable
+final class ScanModel {
     enum Filter: String, CaseIterable, Identifiable {
-        case all = "All"
+        case all = "All items"
         case worktrees = "Worktrees"
         case folders = "Folders"
         case caches = "Caches"
+        case stale = "Stale"
+        case plan = "Cleanup plan"
 
         var id: String { rawValue }
+
+        var symbol: String {
+            switch self {
+            case .all: return "square.stack.3d.up"
+            case .worktrees: return "arrow.triangle.branch"
+            case .folders: return "folder"
+            case .caches: return "archivebox"
+            case .stale: return "clock.badge.exclamationmark"
+            case .plan: return "checklist"
+            }
+        }
+    }
+
+    enum ViewMode: String, CaseIterable, Identifiable {
+        case list = "List"
+        case map = "Map"
+
+        var id: String { rawValue }
+
+        var symbol: String {
+            switch self {
+            case .list: return "list.bullet"
+            case .map: return "rectangle.split.3x3"
+            }
+        }
     }
 
     static let smallBytes: Int64 = 50_000_000
 
-    @Published private(set) var report: Report?
-    @Published private(set) var isScanning = false
+    private(set) var report: Report?
+    private(set) var isScanning = false
     /// A full scan shows the live table over the old report, with the old numbers for comparison.
-    @Published private(set) var isFullScan = false
+    private(set) var isFullScan = false
     /// Live totals of the running scan. Nil when no scan runs.
-    @Published private(set) var progress: ScanProgress?
-    @Published var selection: Set<Int> = []
-    @Published var focusedID: Int?
-    @Published var filter: Filter = .all
-    @Published var searchText = ""
-    @Published var hideSmall = true
-    @Published var copiedPlan = false
+    private(set) var progress: ScanProgress?
+    var selection: Set<Int> = []
+    var focusedID: Int?
+    var filter: Filter = .all
+    var searchText = ""
+    var hideSmall = true
+    var copiedPlan = false
+    var viewMode: ViewMode = .list
+    var showInspector = true
 
     init() {
         // Debug aid for SIZEBERG_SNAPSHOT: "first" starts without a report, "full" runs a full scan over it.
@@ -79,24 +109,32 @@ final class ScanModel: ObservableObject {
         focusedID = nil
     }
 
-    func visibleGroups(in report: Report) -> [GroupReport] {
-        let query = searchText.trimmingCharacters(in: .whitespaces).lowercased()
-        return report.groups.filter { group in
+    /// Groups the sidebar filter and the size toggle let through, before the search text.
+    func groups(in report: Report, filter: Filter) -> [GroupReport] {
+        report.groups.filter { group in
             switch filter {
             case .all: break
             case .worktrees: guard group.kind == .worktree || group.kind == .mainCheckout else { return false }
             case .folders: guard group.kind == .project else { return false }
             case .caches: guard group.kind == .cache || group.kind == .system else { return false }
+            case .stale: guard group.git.map({ $0.status != .active }) ?? false else { return false }
+            case .plan: return selection.contains(group.id)
             }
             if hideSmall, group.apparentBytes < Self.smallBytes, !selection.contains(group.id), group.git?.status != .missing {
                 return false
             }
-            if !query.isEmpty {
-                return group.name.lowercased().contains(query)
-                    || group.path.lowercased().contains(query)
-                    || (group.git?.branch?.lowercased().contains(query) ?? false)
-            }
             return true
+        }
+    }
+
+    func visibleGroups(in report: Report) -> [GroupReport] {
+        let query = searchText.trimmingCharacters(in: .whitespaces).lowercased()
+        let groups = groups(in: report, filter: filter)
+        guard !query.isEmpty else { return groups }
+        return groups.filter { group in
+            group.name.lowercased().contains(query)
+                || group.path.lowercased().contains(query)
+                || (group.git?.branch?.lowercased().contains(query) ?? false)
         }
     }
 

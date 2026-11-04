@@ -7,16 +7,18 @@ On APFS, pnpm and uv install packages as copy-on-write clones. `du`, Finder and 
 ## Build and run
 
 ```sh
-./build.sh                     # needs the Xcode command line tools, not Xcode
+./build.sh                     # macOS 26 or later; needs the command line tools, not Xcode
 open build/SizeBerg.app        # SwiftUI window with table, treemap and cleanup plan
 build/sizeberg                 # text summary
 build/sizeberg --plan          # cleanup commands for stale worktrees and stores (runs nothing)
 build/sizeberg --json          # full report
 build/sizeberg --clear-cache   # forget earlier scans; the app has Clear Cache (⌥⌘R)
-swift test                     # accounting and change-tracking tests
+SDKROOT=$(xcode-select -p)/SDKs/MacOSX26.sdk swift test   # accounting, scoring and change-tracking tests
 ```
 
 Both write the last scan to `~/Library/Caches/sizeberg/last-scan.json`, and the app opens on it.
+
+The app is a plain SwiftUI split view: filters in the sidebar, the list or the map in the middle, the selected item in the inspector, and the cleanup plan on a Liquid Glass bar at the bottom. It builds against the macOS 26 SDK because the macOS 27 SDK makes `@State` a macro whose plugin ships only with Xcode 27. macOS 27 restyles the glass at run time either way.
 
 ## What it scans
 

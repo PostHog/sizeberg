@@ -187,7 +187,7 @@ enum TileBuilder {
 
 struct TreemapView: View {
     let report: Report
-    @EnvironmentObject private var model: ScanModel
+    @Environment(ScanModel.self) private var model
 
     var body: some View {
         let tiles = TileBuilder.tiles(for: report)

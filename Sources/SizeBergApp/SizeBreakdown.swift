@@ -21,9 +21,9 @@ struct SizeBreakdown: View {
         let shared = report.sharedWithOthersBytes(group.id)
         let countedAgain = max(0, group.apparentBytes - alone - shared)
         let parts = [
-            Part(title: "Frees alone", detail: "Held only by this item.", bytes: alone, color: .accentColor),
-            Part(title: "Shared", detail: "Also held by other folders or caches. Frees only when every copy goes.", bytes: shared, color: TileBuilder.sharedColor),
-            Part(title: "Counted again by du", detail: "Copies of the same data inside this item. The disk holds it once.", bytes: countedAgain, color: Color.secondary.opacity(0.35)),
+            Part(title: "Frees alone", detail: "Only this item holds it.", bytes: alone, color: .accentColor),
+            Part(title: "Shared", detail: "Frees once every copy goes.", bytes: shared, color: TileBuilder.sharedColor),
+            Part(title: "Counted again by du", detail: "Same data, counted twice.", bytes: countedAgain, color: Color.secondary.opacity(0.35)),
         ].filter { $0.bytes > 0 }
         let total = max(parts.reduce(0) { $0 + $1.bytes }, 1)
 
@@ -32,7 +32,7 @@ struct SizeBreakdown: View {
                 Text(bytes(alone))
                     .font(.title3.weight(.semibold))
                     .monospacedDigit()
-                Text("freed by deleting this alone")
+                Text("frees alone")
                     .foregroundStyle(.secondary)
                 Spacer()
                 Text("du says \(bytes(group.apparentBytes))")
@@ -64,7 +64,7 @@ struct SizeBreakdown: View {
                             .gridColumnAlignment(.trailing)
                         Text(part.detail)
                             .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .lineLimit(3)
                     }
                 }
             }

@@ -3,6 +3,11 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# The macOS 27 SDK turns @State into a macro whose plugin ships only with Xcode 27, not with the
+# command line tools. The macOS 26 SDK has every Liquid Glass API used here; macOS 27 restyles them at run time.
+SDKROOT="$(xcode-select -p)/SDKs/MacOSX26.sdk"
+export SDKROOT
+
 swift build -c release
 
 app="build/SizeBerg.app"
@@ -44,7 +49,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
+    <string>26.0</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.developer-tools</string>
     <key>NSHighResolutionCapable</key>
