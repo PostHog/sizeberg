@@ -57,6 +57,10 @@ final class ScanModel {
     var copiedPlan = false
     var viewMode: ViewMode = .list
     var showInspector = true
+    /// Lists worktrees under their main checkout instead of as rows of their own.
+    var groupWorktrees = true
+    /// Main checkouts whose worktrees are shown.
+    var expandedRepositories: Set<Int> = []
     /// The cleanup sheet's state while it is open.
     var cleanup: CleanupSession?
 

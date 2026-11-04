@@ -127,10 +127,19 @@ private struct BadgeLabelStyle: LabelStyle {
 struct CleanupMeter: View {
     static let steps = 5
 
-    let score: CleanupScore
+    /// Frees-alone bytes weighted by how likely the item can go: `CleanupScore.weightedBytes`.
+    let weightedBytes: Int64
+
+    init(score: CleanupScore) {
+        weightedBytes = score.weightedBytes
+    }
+
+    init(weightedBytes: Int64) {
+        self.weightedBytes = weightedBytes
+    }
 
     var level: Int {
-        let gigabytes = Double(score.weightedBytes) / 1_000_000_000
+        let gigabytes = Double(weightedBytes) / 1_000_000_000
         switch gigabytes {
         case 5...: return 5
         case 2..<5: return 4

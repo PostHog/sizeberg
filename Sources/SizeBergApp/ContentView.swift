@@ -75,6 +75,7 @@ struct ContentView: View {
             .disabled(model.isScanning)
             Menu {
                 Toggle("Hide items under 50 MB", isOn: $model.hideSmall)
+                Toggle("Group worktrees under main checkout", isOn: $model.groupWorktrees)
             } label: {
                 Label("Filter", systemImage: "line.3.horizontal.decrease")
             }
@@ -105,6 +106,11 @@ extension ContentView {
             .id
         if ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT_VIEW"] == "map" {
             model.viewMode = .map
+        }
+        if let name = ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT_REPO"],
+           let main = report.groups.first(where: { $0.kind == .mainCheckout && $0.name == name }) {
+            model.expandedRepositories.insert(main.id)
+            model.focusedID = main.id
         }
         // Opens the confirmation only; nothing runs without pressing Delete.
         if ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT_CLEANUP"] != nil {

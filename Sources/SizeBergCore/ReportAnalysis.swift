@@ -79,6 +79,12 @@ extension Report {
         groups.filter { selection.contains($0.id) }.reduce(0) { $0 + $1.apparentBytes }
     }
 
+    /// Worktrees of the repository whose main checkout is `main`, matched by repository path.
+    public func worktrees(of main: GroupReport) -> [GroupReport] {
+        guard main.kind == .mainCheckout, let repoPath = main.git?.repoPath else { return [] }
+        return groups.filter { $0.kind == .worktree && $0.git?.repoPath == repoPath }
+    }
+
     /// Shared bytes this group holds together with other groups.
     public func sharedWithOthersBytes(_ id: Int) -> Int64 {
         sharedSets.filter { $0.groupIDs.contains(id) }.reduce(0) { $0 + $1.bytes }

@@ -34,8 +34,14 @@ struct GroupDetail: View {
                     }
                 }
             }
+            let worktrees = report.worktrees(of: group)
+            if !worktrees.isEmpty {
+                Section("Worktrees") {
+                    worktreeSummary(worktrees)
+                }
+            }
             if group.kind != .system, group.apparentBytes > 0 {
-                Section("What deleting frees") {
+                Section(group.kind == .mainCheckout ? "What deleting the checkout would free" : "What deleting frees") {
                     SizeBreakdown(report: report, group: group)
                 }
             }
@@ -90,6 +96,33 @@ struct GroupDetail: View {
             if group.selectable {
                 Toggle("In cleanup plan", isOn: model.binding(for: group.id))
             }
+        }
+    }
+
+    /// The checkout stays; its worktrees are what can go. Together they free more than each alone,
+    /// because blocks shared only among them free once all of them go.
+    @ViewBuilder
+    private func worktreeSummary(_ worktrees: [GroupReport]) -> some View {
+        let ids = Set(worktrees.map(\.id))
+        let stale = worktrees.filter { $0.git?.status == .stale }
+        LabeledContent("Worktrees", value: "\(worktrees.count), \(stale.count) stale")
+        LabeledContent("All together free") {
+            Text(bytes(report.freeableBytes(selection: ids))).monospacedDigit().fontWeight(.medium)
+        }
+        LabeledContent("Each alone, added up") {
+            Text(bytes(worktrees.reduce(0) { $0 + $1.freeableAloneBytes })).monospacedDigit()
+        }
+        if !stale.isEmpty {
+            LabeledContent("Stale ones together free") {
+                Text(bytes(report.freeableBytes(selection: Set(stale.map(\.id))))).monospacedDigit()
+            }
+        }
+        HStack {
+            Spacer()
+            if !stale.isEmpty {
+                Button("Select stale") { model.selection.formUnion(stale.map(\.id)) }
+            }
+            Button("Select all") { model.selection.formUnion(ids) }
         }
     }
 
