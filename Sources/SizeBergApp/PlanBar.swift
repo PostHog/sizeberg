@@ -19,8 +19,14 @@ struct PlanBar: View {
                 } else {
                     Button("Clear") { model.clearSelection() }
                         .buttonStyle(.glass)
-                    Button(model.copiedPlan ? "Copied" : "Copy cleanup commands") { model.copyPlan() }
+                    Button(model.copiedPlan ? "Copied" : "Copy commands") { model.copyPlan() }
+                        .buttonStyle(.glass)
+                        .help("Copy the cleanup commands to run them yourself")
+                    Button("Clean Up…", role: .destructive) { model.prepareCleanup() }
                         .buttonStyle(.glassProminent)
+                        .tint(.red)
+                        .disabled(model.isScanning)
+                        .help("Review the cleanup, then run it")
                 }
             }
             .controlSize(.large)

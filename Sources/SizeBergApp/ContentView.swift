@@ -18,6 +18,9 @@ struct ContentView: View {
                 .searchable(text: $model.searchText, placement: .toolbar, prompt: "Name, path or branch")
         }
         .onAppear(perform: prepareSnapshot)
+        .sheet(isPresented: Binding(get: { model.cleanup != nil }, set: { if !$0 { model.closeCleanup() } })) {
+            CleanupSheet()
+        }
     }
 
     @ViewBuilder
@@ -102,6 +105,10 @@ extension ContentView {
             .id
         if ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT_VIEW"] == "map" {
             model.viewMode = .map
+        }
+        // Opens the confirmation only; nothing runs without pressing Delete.
+        if ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT_CLEANUP"] != nil {
+            model.prepareCleanup()
         }
     }
 }

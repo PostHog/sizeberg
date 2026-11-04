@@ -36,7 +36,8 @@ enum Shell {
         return (fromPath + candidates).first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    static func run(_ executable: String, _ arguments: [String], cwd: String? = nil, timeout: TimeInterval = 20) -> Result {
+    /// `mergeErrors` puts standard error into `output` too, for messages shown to people.
+    static func run(_ executable: String, _ arguments: [String], cwd: String? = nil, timeout: TimeInterval = 20, mergeErrors: Bool = false) -> Result {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -49,7 +50,8 @@ enum Shell {
         process.environment = environment
         let pipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
+        process.standardError = mergeErrors ? pipe : FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
         do {
             try process.run()
         } catch {

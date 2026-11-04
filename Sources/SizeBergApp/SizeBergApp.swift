@@ -22,6 +22,10 @@ struct SizeBergApp: App {
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(model.isScanning)
                 Divider()
+                Button("Clean Up Selection…") { model.prepareCleanup() }
+                    .keyboardShortcut(.delete, modifiers: [.command])
+                    .disabled(model.isScanning || model.selection.isEmpty)
+                Divider()
                 Button("Clear Cache") { model.clearCache() }
                     .keyboardShortcut("r", modifiers: [.command, .option])
                     .disabled(model.isScanning)

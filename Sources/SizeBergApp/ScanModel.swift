@@ -57,6 +57,8 @@ final class ScanModel {
     var copiedPlan = false
     var viewMode: ViewMode = .list
     var showInspector = true
+    /// The cleanup sheet's state while it is open.
+    var cleanup: CleanupSession?
 
     init() {
         // Debug aid for SIZEBERG_SNAPSHOT: "first" starts without a report, "full" runs a full scan over it.
@@ -184,6 +186,47 @@ final class ScanModel {
         }
     }
 
+    /// Opens the confirmation sheet for the selection.
+    func prepareCleanup() {
+        guard let report, !selection.isEmpty, !isScanning else { return }
+        let plan = CleanupRunner.plan(for: report, selection: selection)
+        cleanup = CleanupSession(
+            items: plan.steps.map { CleanupSession.Item(step: $0) },
+            manual: plan.manual.map { CleanupSession.Manual(name: $0.name, reason: $0.reason) },
+            expectedBytes: report.freeableBytes(selection: Set(plan.steps.map(\.id)))
+        )
+    }
+
+    /// Runs the steps one after another, off the main thread, and measures free space around them.
+    func runCleanup() {
+        guard var session = cleanup, session.phase == .confirm else { return }
+        session.phase = .running
+        session.freeBefore = CleanupRunner.freeBytes()
+        cleanup = session
+        Task {
+            for index in session.items.indices {
+                cleanup?.items[index].status = .running
+                let step = session.items[index].step
+                let outcome = await Task.detached(priority: .userInitiated) { CleanupRunner.run(step) }.value
+                cleanup?.items[index].status = .finished(outcome)
+                if outcome == .done {
+                    selection.remove(step.id)
+                }
+            }
+            cleanup?.freeAfter = CleanupRunner.freeBytes()
+            cleanup?.phase = .finished
+        }
+    }
+
+    /// Closes the sheet. After a run, scans again so the list shows what is left.
+    func closeCleanup() {
+        guard let session = cleanup, session.phase != .running else { return }
+        cleanup = nil
+        if session.phase == .finished {
+            scan()
+        }
+    }
+
     func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
@@ -192,4 +235,42 @@ final class ScanModel {
     func reveal(_ path: String) {
         NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
     }
+}
+
+/// What the cleanup sheet shows: the plan, then each step's progress and the space freed.
+struct CleanupSession {
+    enum Phase {
+        case confirm
+        case running
+        case finished
+    }
+
+    enum Status: Equatable {
+        case waiting
+        case running
+        case finished(CleanupOutcome)
+    }
+
+    struct Item: Identifiable {
+        var step: CleanupStep
+        var status: Status = .waiting
+
+        var id: Int { step.id }
+    }
+
+    struct Manual: Identifiable {
+        var name: String
+        var reason: String
+
+        var id: String { name }
+    }
+
+    var items: [Item]
+    var manual: [Manual]
+    var expectedBytes: Int64
+    var phase = Phase.confirm
+    var freeBefore: Int64 = 0
+    var freeAfter: Int64 = 0
+
+    var freedBytes: Int64 { max(0, freeAfter - freeBefore) }
 }
