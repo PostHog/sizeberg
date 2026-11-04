@@ -1,3 +1,4 @@
+import AppKit
 import SizeBergCore
 import SwiftUI
 
@@ -47,15 +48,29 @@ extension GroupReport {
     var statusColor: Color {
         switch git?.status {
         case .stale: return .red
-        case .staleWithLocalWork: return .orange
+        // System orange and yellow are too light for text on their own tint; these pass 4.5:1.
+        case .staleWithLocalWork: return Self.localWorkColor
         case .missing: return .secondary
         default: break
         }
         switch kind {
-        case .worktree, .mainCheckout: return .blue
-        case .cache: return Color(red: 0.86, green: 0.72, blue: 0.22)
-        case .system: return .indigo
+        case .worktree: return .blue
+        case .mainCheckout: return .indigo
+        case .cache: return .adaptive(light: Color(red: 0.52, green: 0.40, blue: 0.0), dark: Color(red: 0.93, green: 0.78, blue: 0.32))
+        case .system: return .purple
         case .project: return .gray
+        }
+    }
+
+    static let localWorkColor = Color.adaptive(light: Color(red: 0.70, green: 0.36, blue: 0.0), dark: .orange)
+
+    var typeSymbol: String {
+        switch kind {
+        case .worktree: return git?.status == .missing ? "questionmark.folder" : "arrow.triangle.branch"
+        case .mainCheckout: return "chevron.left.forwardslash.chevron.right"
+        case .project: return "folder"
+        case .cache: return "archivebox"
+        case .system: return "shippingbox"
         }
     }
 
@@ -87,11 +102,82 @@ struct StatusBadge: View {
     let group: GroupReport
 
     var body: some View {
-        Text(group.statusText)
+        Label(group.statusText, systemImage: group.typeSymbol)
+            .labelStyle(BadgeLabelStyle())
             .font(.caption.weight(.medium))
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 7)
             .padding(.vertical, 2)
-            .background(group.statusColor.opacity(0.18), in: Capsule())
+            .background(group.statusColor.opacity(0.14), in: Capsule())
             .foregroundStyle(group.statusColor)
+            .fixedSize()
+    }
+}
+
+private struct BadgeLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) {
+            configuration.icon
+                .imageScale(.small)
+            configuration.title
+        }
+    }
+}
+
+/// Five steps of cleanup value, on frees-alone bytes weighted by how likely the item can go.
+struct CleanupMeter: View {
+    static let steps = 5
+
+    let score: CleanupScore
+
+    var level: Int {
+        let gigabytes = Double(score.weightedBytes) / 1_000_000_000
+        switch gigabytes {
+        case 5...: return 5
+        case 2..<5: return 4
+        case 0.5..<2: return 3
+        case 0.1..<0.5: return 2
+        case let value where value > 0: return 1
+        default: return 0
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(0..<Self.steps, id: \.self) { step in
+                Capsule()
+                    .fill(step < level ? Color.accentColor : Color.secondary.opacity(0.18))
+                    .frame(width: 7, height: 5)
+            }
+        }
+        .accessibilityElement()
+        .accessibilityLabel("Cleanup value \(level) of \(Self.steps)")
+    }
+}
+
+/// Meter plus the facts behind it, for the table and the detail panel.
+struct CleanupCell: View {
+    let score: CleanupScore
+    /// Meter and reason on one line, for the detail panel.
+    var isInline = false
+
+    var body: some View {
+        let layout = isInline ? AnyLayout(HStackLayout(spacing: 8)) : AnyLayout(VStackLayout(alignment: .leading, spacing: 3))
+        layout {
+            CleanupMeter(score: score)
+            Text(score.reason)
+                .font(isInline ? .callout : .caption)
+                .foregroundStyle(score.hasLocalWork ? AnyShapeStyle(GroupReport.localWorkColor) : AnyShapeStyle(.secondary))
+                .lineLimit(1)
+        }
+        .help("Frees \(bytes(score.weightedBytes)) weighted by how likely it can go (\(Int((score.confidence * 100).rounded()))%): \(score.reason)")
+    }
+}
+
+extension Color {
+    /// A color that differs between light and dark appearance.
+    static func adaptive(light: Color, dark: Color) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(dark) : NSColor(light)
+        })
     }
 }

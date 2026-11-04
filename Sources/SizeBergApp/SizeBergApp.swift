@@ -34,6 +34,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         // A bare SwiftPM binary starts as a background process; this gives it a Dock icon and focus.
         NSApp.setActivationPolicy(.regular)
+        // Debug aid for SIZEBERG_SNAPSHOT: check the dark appearance without changing the system setting.
+        if ProcessInfo.processInfo.environment["SIZEBERG_APPEARANCE"] == "dark" {
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

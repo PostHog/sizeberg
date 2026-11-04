@@ -105,7 +105,7 @@ struct MainView: View {
             Divider()
             HSplitView {
                 GroupTable(report: report)
-                    .frame(minWidth: 640, idealWidth: 700)
+                    .frame(minWidth: 680, idealWidth: 780)
                 VSplitView {
                     TreemapView(report: report)
                         .frame(minHeight: 300, idealHeight: 420)
@@ -170,6 +170,8 @@ struct SummaryStrip: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
+        // Cards stretch to the tallest one, so a two-line caption does not leave ragged bottoms.
+        .fixedSize(horizontal: false, vertical: true)
         .padding(12)
     }
 }
@@ -197,7 +199,8 @@ struct StatCard: View {
                 .lineLimit(2)
         }
         .padding(10)
-        .frame(width: 170, alignment: .leading)
+        .frame(width: 170, alignment: .topLeading)
+        .frame(maxHeight: .infinity, alignment: .top)
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(isHighlighted ? Color.green.opacity(0.15) : Color.secondary.opacity(0.08))
@@ -242,7 +245,7 @@ struct ChangedCloneBanner: View {
 struct GroupTable: View {
     let report: Report
     @EnvironmentObject private var model: ScanModel
-    @State private var sortOrder = [KeyPathComparator(\GroupReport.freeableAloneBytes, order: .reverse)]
+    @State private var sortOrder = [KeyPathComparator(\GroupReport.cleanupSortKey, order: .reverse)]
 
     var body: some View {
         let rows = model.visibleGroups(in: report).sorted(using: sortOrder)
@@ -281,11 +284,17 @@ struct GroupTable: View {
                             .lineLimit(1)
                     }
                 }
-                .width(min: 140, ideal: 190)
-                TableColumn("Status", value: \.statusSortKey) { group in
+                .width(min: 140, ideal: 180)
+                TableColumn("Type", value: \.statusSortKey) { group in
                     StatusBadge(group: group)
                 }
-                .width(min: 80, ideal: 100)
+                .width(min: 96, ideal: 104)
+                TableColumn("Cleanup", value: \.cleanupSortKey) { group in
+                    if let score = group.cleanupScore() {
+                        CleanupCell(score: score)
+                    }
+                }
+                .width(min: 110, ideal: 140)
                 TableColumn("Frees alone", value: \.freeableAloneBytes) { group in
                     Text(group.freesAloneText)
                         .monospacedDigit()
@@ -300,10 +309,6 @@ struct GroupTable: View {
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
                 .width(min: 70, ideal: 80)
-                TableColumn("Last active", value: \.lastActiveSortKey) { group in
-                    Text(group.lastActiveText).foregroundStyle(.secondary)
-                }
-                .width(min: 70, ideal: 85)
             }
         }
     }
@@ -353,6 +358,13 @@ struct GroupDetail: View {
                     .truncationMode(.middle)
                 Button("Show in Finder") { model.reveal(group.path) }
                     .controlSize(.small)
+            }
+            if let score = group.cleanupScore() {
+                HStack(spacing: 8) {
+                    Text("Cleanup value").foregroundStyle(.secondary)
+                    CleanupCell(score: score, isInline: true)
+                }
+                .font(.callout)
             }
             if let git = group.git {
                 gitFacts(git)
