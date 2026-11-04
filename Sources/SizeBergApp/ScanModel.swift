@@ -59,20 +59,21 @@ final class ScanModel {
     var showInspector = true
     /// Lists worktrees under their main checkout instead of as rows of their own.
     var groupWorktrees = true
-    /// Main checkouts whose worktrees are shown.
-    var expandedRepositories: Set<Int> = []
+    /// Main checkouts whose worktrees are folded away. Repositories start open, so stale worktrees stay in sight.
+    var collapsedRepositories: Set<Int> = []
     /// The cleanup sheet's state while it is open.
     var cleanup: CleanupSession?
 
     init() {
-        // Debug aid for SIZEBERG_SNAPSHOT: "first" starts without a report, "full" runs a full scan over it.
+        // Debug aid for SIZEBERG_SNAPSHOT: "first" scans without a report, "full" runs a full scan over the last one.
         let snapshotScan = ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT_SCAN"]
-        if snapshotScan != "first" {
-            report = Report.loadCached()
-        }
-        if snapshotScan != nil {
+        if snapshotScan == "first" {
             DispatchQueue.main.async { self.scan(full: true) }
+            return
         }
+        report = Report.loadCached()
+        guard snapshotScan == "full" else { return }
+        DispatchQueue.main.async { self.scan(full: true) }
     }
 
     func scan(full: Bool = false) {
@@ -188,6 +189,11 @@ final class ScanModel {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             self?.copiedPlan = false
         }
+    }
+
+    func collapseAllRepositories() {
+        guard let report else { return }
+        collapsedRepositories = Set(report.groups.filter { $0.kind == .mainCheckout }.map(\.id))
     }
 
     /// Opens the confirmation sheet for the selection.

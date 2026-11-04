@@ -34,7 +34,6 @@ struct ScanningView: View {
                 Text("\(progress.finalGroupCount) of \(progress.groups.count) items final. A final row is exact: every copy of its files has been seen. Other rows show what is certain so far. Dependency folders are read last because deleting them frees little.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                    .lineLimit(3)
             }
             .padding(16)
             Divider()

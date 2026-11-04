@@ -6,7 +6,7 @@ import SwiftUI
 struct ItemRow: Identifiable {
     let group: GroupReport
     /// Worktrees shown below a main checkout. Nil for a plain row.
-    let children: [ItemRow]?
+    var children: [ItemRow]?
     /// Frees-alone bytes, or for a main checkout what its listed worktrees free together.
     let freesBytes: Int64
     let duBytes: Int64
@@ -16,7 +16,7 @@ struct ItemRow: Identifiable {
 
     var id: Int { group.id }
     var name: String { group.name }
-    var typeKey: String { group.statusSortKey }
+    var typeKey: String { group.statusText }
     var isRepository: Bool { children != nil }
 
     init(group: GroupReport) {
@@ -35,7 +35,7 @@ struct ItemRow: Identifiable {
         freesBytes = report.freeableBytes(selection: Set(worktrees.map(\.id)))
         duBytes = worktrees.reduce(0) { $0 + $1.apparentBytes }
         cleanupKey = worktrees.reduce(0) { $0 + max(0, $1.cleanupSortKey) }
-        staleCount = worktrees.filter { $0.git?.status == .stale }.count
+        staleCount = worktrees.filter(\.isStale).count
     }
 
     /// Rows for the visible groups, with worktrees under their main checkout when `nested` is on.
@@ -96,6 +96,7 @@ struct GroupTable: View {
             .width(min: 110, ideal: 140)
             TableColumn("Frees alone", value: \.freesBytes) { row in
                 VStack(alignment: .trailing, spacing: 1) {
+                    // Container disks are listed for context; the scan does not split them into removable parts.
                     Text(row.group.kind == .system ? "n/a" : bytes(row.freesBytes))
                         .monospacedDigit()
                         .fontWeight(.medium)
@@ -133,8 +134,9 @@ struct GroupTable: View {
     /// Sorts repositories and the worktrees inside them by the same column.
     private func sorted(_ rows: [ItemRow]) -> [ItemRow] {
         rows.map { row in
-            guard let children = row.children else { return row }
-            return ItemRow(sortedChildrenOf: row, children: children.sorted(using: sortOrder))
+            var sortedRow = row
+            sortedRow.children = row.children?.sorted(using: sortOrder)
+            return sortedRow
         }
         .sorted(using: sortOrder)
     }
@@ -143,12 +145,12 @@ struct GroupTable: View {
         // Searching or a cleanup filter is about worktrees, so open every repository then.
         let forceOpen = !model.searchText.isEmpty || model.filter == .stale || model.filter == .plan
         return Binding(
-            get: { forceOpen || model.expandedRepositories.contains(id) },
+            get: { forceOpen || !model.collapsedRepositories.contains(id) },
             set: { isOpen in
                 if isOpen {
-                    model.expandedRepositories.insert(id)
+                    model.collapsedRepositories.remove(id)
                 } else {
-                    model.expandedRepositories.remove(id)
+                    model.collapsedRepositories.insert(id)
                 }
             }
         )
@@ -189,16 +191,5 @@ struct GroupTable: View {
         } else if let score = row.group.cleanupScore() {
             CleanupCell(score: score)
         }
-    }
-}
-
-extension ItemRow {
-    fileprivate init(sortedChildrenOf row: ItemRow, children: [ItemRow]) {
-        group = row.group
-        self.children = children
-        freesBytes = row.freesBytes
-        duBytes = row.duBytes
-        cleanupKey = row.cleanupKey
-        staleCount = row.staleCount
     }
 }

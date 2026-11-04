@@ -115,64 +115,49 @@ final class FamilyTable: @unchecked Sendable {
     }
 }
 
-/// Reads the current copy count of one file by inode, through /.vol/<device>/<inode>:
-/// full clones of its data (ATTR_CMNEXT_CLONE_REFCNT) for a clone, the link count for a hard link.
-final class CopyCountProbe {
-    // ATTR_CMNEXT_CLONE_REFCNT, read through forkattr with FSOPT_ATTR_CMN_EXTENDED.
+/// Reads APFS facts about one file by inode, through /.vol/<device>/<inode>.
+/// Used for the few files whose answer the bulk directory read cannot give or that may have gone stale.
+/// One probe per thread: it reuses one request and one buffer.
+final class FileProbe {
+    // ATTR_CMNEXT_PRIVATESIZE and ATTR_CMNEXT_CLONE_REFCNT, read through forkattr with FSOPT_ATTR_CMN_EXTENDED.
+    private static let privateSizeBit: attrgroup_t = 0x0000_0008
     private static let cloneCountBit: attrgroup_t = 0x0000_1000
     // FSOPT_ATTR_CMN_EXTENDED | FSOPT_NOFOLLOW
     private static let options: UInt32 = 0x20 | 0x1
-    private static let expectedLength: UInt32 = 4 + 4
+    private static let bufferSize = 32
 
     private var request = attrlist()
-    private let buffer = UnsafeMutableRawPointer.allocate(byteCount: 16, alignment: 8)
+    private let buffer = UnsafeMutableRawPointer.allocate(byteCount: FileProbe.bufferSize, alignment: 8)
 
     init() {
         request.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
-        request.forkattr = Self.cloneCountBit
     }
 
     deinit {
         buffer.deallocate()
     }
 
+    /// Blocks only this file holds. Nil when APFS does not answer.
+    func privateBytes(device: Int32, inode: UInt64) -> Int64? {
+        guard read(Self.privateSizeBit, valueLength: 8, device: device, inode: inode) else { return nil }
+        return buffer.loadUnaligned(fromByteOffset: 4, as: Int64.self)
+    }
+
+    /// Full clones of the file's data for a clone, the link count for a hard link.
     func copies(of entry: SharedEntry, device: Int32) -> UInt16? {
-        let path = "/.vol/\(device)/\(entry.inode)"
         if entry.isHardLink {
             var info = stat()
-            guard lstat(path, &info) == 0 else { return nil }
+            guard lstat("/.vol/\(device)/\(entry.inode)", &info) == 0 else { return nil }
             return UInt16(clamping: info.st_nlink)
         }
-        guard getattrlist(path, &request, buffer, 16, Self.options) == 0,
-              buffer.loadUnaligned(fromByteOffset: 0, as: UInt32.self) == Self.expectedLength else { return nil }
+        guard read(Self.cloneCountBit, valueLength: 4, device: device, inode: entry.inode) else { return nil }
         return UInt16(clamping: buffer.loadUnaligned(fromByteOffset: 4, as: UInt32.self))
     }
-}
 
-/// Reads ATTR_CMNEXT_PRIVATESIZE for single files by inode, through /.vol/<device>/<inode>.
-/// Used only for clones whose siblings the scan did not see. One probe per thread.
-final class PrivateSizeProbe {
-    // ATTR_CMNEXT_PRIVATESIZE, read through forkattr with FSOPT_ATTR_CMN_EXTENDED.
-    private static let privateSizeBit: attrgroup_t = 0x0000_0008
-    // FSOPT_ATTR_CMN_EXTENDED | FSOPT_NOFOLLOW
-    private static let options: UInt32 = 0x20 | 0x1
-    private static let expectedLength: UInt32 = 4 + 8
-
-    private var request = attrlist()
-    private let buffer = UnsafeMutableRawPointer.allocate(byteCount: 32, alignment: 8)
-
-    init() {
-        request.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
-        request.forkattr = Self.privateSizeBit
-    }
-
-    deinit {
-        buffer.deallocate()
-    }
-
-    func privateBytes(device: Int32, inode: UInt64) -> Int64? {
-        guard getattrlist("/.vol/\(device)/\(inode)", &request, buffer, 32, Self.options) == 0,
-              buffer.loadUnaligned(fromByteOffset: 0, as: UInt32.self) == Self.expectedLength else { return nil }
-        return buffer.loadUnaligned(fromByteOffset: 4, as: Int64.self)
+    /// Fills the buffer with one fork attribute: a 4-byte length, then the value.
+    private func read(_ attribute: attrgroup_t, valueLength: UInt32, device: Int32, inode: UInt64) -> Bool {
+        request.forkattr = attribute
+        return getattrlist("/.vol/\(device)/\(inode)", &request, buffer, Self.bufferSize, Self.options) == 0
+            && buffer.loadUnaligned(fromByteOffset: 0, as: UInt32.self) == 4 + valueLength
     }
 }

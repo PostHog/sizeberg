@@ -74,27 +74,11 @@ extension GroupReport {
         }
     }
 
-    var statusSortKey: String { statusText }
-
     var subtitle: String {
         if let branch = git?.branch {
             return branch
         }
         return displayPath(path)
-    }
-
-    var lastActiveSortKey: Date {
-        git?.lastActive ?? .distantPast
-    }
-
-    var lastActiveText: String {
-        guard let date = git?.lastActive else { return "" }
-        return date.formatted(.relative(presentation: .named))
-    }
-
-    /// Container disks are listed for context; the scan does not split them into removable parts.
-    var freesAloneText: String {
-        kind == .system ? "n/a" : bytes(freeableAloneBytes)
     }
 }
 
@@ -130,14 +114,6 @@ struct CleanupMeter: View {
     /// Frees-alone bytes weighted by how likely the item can go: `CleanupScore.weightedBytes`.
     let weightedBytes: Int64
 
-    init(score: CleanupScore) {
-        weightedBytes = score.weightedBytes
-    }
-
-    init(weightedBytes: Int64) {
-        self.weightedBytes = weightedBytes
-    }
-
     var level: Int {
         let gigabytes = Double(weightedBytes) / 1_000_000_000
         switch gigabytes {
@@ -172,7 +148,7 @@ struct CleanupCell: View {
     var body: some View {
         let layout = isInline ? AnyLayout(HStackLayout(spacing: 8)) : AnyLayout(VStackLayout(alignment: .leading, spacing: 3))
         layout {
-            CleanupMeter(score: score)
+            CleanupMeter(weightedBytes: score.weightedBytes)
             Text(score.reason)
                 .font(isInline ? .callout : .caption)
                 .foregroundStyle(score.hasLocalWork ? AnyShapeStyle(GroupReport.localWorkColor) : AnyShapeStyle(.secondary))

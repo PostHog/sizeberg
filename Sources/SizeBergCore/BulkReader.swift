@@ -20,7 +20,7 @@ struct DirectoryEntry {
 /// for every entry in a few system calls, instead of a path lookup plus lstat per file.
 /// It skips ATTR_CMNEXT_PRIVATESIZE on purpose: that one makes APFS walk each file's extents and
 /// doubles the scan time. Clone families and reference counts give the same answer for full clones;
-/// see `PrivateSizeProbe` for the rest.
+/// see `FileProbe` for the rest.
 final class BulkReader {
     static let regularFile: UInt32 = 1
     static let directory: UInt32 = 2

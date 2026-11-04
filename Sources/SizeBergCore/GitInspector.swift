@@ -92,19 +92,25 @@ final class GitInspector: @unchecked Sendable {
             merged = Shell.run(git, ["-C", path, "merge-base", "--is-ancestor", "HEAD", defaultRef]).status == 0
         }
         info.mergedIntoDefault = merged
-        let unpushed = Shell.run(git, ["-C", path, "rev-list", "-n", "1", "HEAD", "--not", "--remotes"])
-        let hasUnpushedCommits = unpushed.status != 0 || !unpushed.output.isEmpty
-        info.hasUnpushedCommits = hasUnpushedCommits
+        info.hasUnpushedCommits = Self.hasUnpushedCommits(at: path, git: git)
         guard Self.isStale(info) else { return info }
 
         // git status reads the whole tree, so it only runs where it decides stale vs local work.
-        let status = Shell.run(git, ["-C", path, "status", "--porcelain"], timeout: 30)
-        // A status that fails or times out counts as dirty: never suggest removing work we could not check.
-        let hasUncommittedChanges = status.status != 0 || status.timedOut || !status.output.isEmpty
-        info.hasUncommittedChanges = hasUncommittedChanges
-        let hasLocalWork = hasUncommittedChanges || (hasUnpushedCommits && !merged)
-        info.status = hasLocalWork ? .staleWithLocalWork : .stale
+        info.hasUncommittedChanges = Self.hasUncommittedChanges(at: path, git: git)
+        info.status = info.hasLocalWork ? .staleWithLocalWork : .stale
         return info
+    }
+
+    /// A status that fails or times out counts as dirty: never suggest removing work we could not check.
+    static func hasUncommittedChanges(at path: String, git: String) -> Bool {
+        let status = Shell.run(git, ["-C", path, "status", "--porcelain"], timeout: 60)
+        return status.status != 0 || status.timedOut || !status.output.isEmpty
+    }
+
+    /// Commits on HEAD that no remote branch has. A failed check counts as yes.
+    static func hasUnpushedCommits(at path: String, git: String) -> Bool {
+        let unpushed = Shell.run(git, ["-C", path, "rev-list", "-n", "1", "HEAD", "--not", "--remotes"])
+        return unpushed.status != 0 || !unpushed.output.isEmpty
     }
 
     private static func quietDays(_ info: GitInfo) -> Double {
@@ -113,8 +119,7 @@ final class GitInspector: @unchecked Sendable {
 
     private static func isStale(_ info: GitInfo) -> Bool {
         let quietDays = quietDays(info)
-        let workIsFinished = info.mergedIntoDefault == true || info.upstreamGone
-        return (workIsFinished && quietDays >= finishedWorkQuietDays) || quietDays >= anyWorkQuietDays
+        return (info.workIsFinished && quietDays >= finishedWorkQuietDays) || quietDays >= anyWorkQuietDays
     }
 
     /// The index file changes on every checkout, commit, add and status, so its mtime tracks use.

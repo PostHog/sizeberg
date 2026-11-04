@@ -54,38 +54,39 @@ public final class Scanner {
         let segments = Self.segments(specs: specs, nestedRoots: nestedRoots)
         let discovered = Date()
 
-        var segmentScans = reuseCachedScans(segments, volumeUUID: volumeUUID)
+        let state = cache.loadState()
+        var segmentScans = reuseCachedScans(segments, state: state, volumeUUID: volumeUUID)
         let toWalk = segments.indices.filter { segmentScans[$0] == nil }
         // Copy counts in reused segments go stale when a copy elsewhere is deleted or changed:
         // nothing in their own folders changes, so FSEvents says nothing. Ask APFS again for those files.
-        let departed = segmentScans.isEmpty ? [] : departedSharedFiles(walking: toWalk, segments: segments)
-        let recounted = Self.refreshCopyCounts(in: &segmentScans, sharedWith: departed)
+        let departed = segmentScans.isEmpty ? [] : departedSharedFiles(walking: toWalk, segments: segments, state: state)
+        let recount = Self.refreshCopyCounts(in: &segmentScans, sharedWith: departed)
         if isDebugging {
-            FileHandle.standardError.write(Data("copy counts: \(departed.count) departed shared files, \(recounted.count) reused segments recounted\n".utf8))
+            FileHandle.standardError.write(Data("copy counts: \(departed.count) departed shared files, \(recount.changed.count) changed in \(recount.segments.count) reused segments\n".utf8))
         }
         let reusedAt = Date()
         let reporter = ProgressReporter(
             specs: specs,
             segments: segments,
             startedAt: start,
-            expectedFiles: expectedFileCount(segments),
+            expectedFiles: Self.expectedFileCount(segments, state: state),
             progress: progress
         )
         var walkProgress: (@Sendable (WalkProgress) -> Void)?
         if progress != nil {
             walkProgress = { reporter.reading($0) }
         }
-        var onGroupRead: (@Sendable (Int, [GroupScan]) -> Void)?
         let finisher = GroupFinisher(reporter: reporter)
+        var onGroupRead: (@Sendable (Int, [GroupScan]) -> Void)?
         if progress != nil {
-            let cachedScans = segmentScans
-            onGroupRead = { group, walkedScans in
-                var scan = GroupScan()
-                for (index, cached) in cachedScans where segments[index].group == group {
-                    scan.merge(cached)
-                }
-                walkedScans.forEach { scan.merge($0) }
-                finisher.add(group: group, scan: scan)
+            // Only each group's own cached scans travel with the closure, not the whole dictionary.
+            var cachedByGroup: [Int: [GroupScan]] = [:]
+            for (index, scan) in segmentScans {
+                cachedByGroup[segments[index].group, default: []].append(scan)
+            }
+            let cached = cachedByGroup
+            onGroupRead = { group, walkedParts in
+                finisher.add(group: group, parts: (cached[group] ?? []) + walkedParts)
             }
         }
         let walker = Walker(
@@ -117,11 +118,14 @@ public final class Scanner {
         var knownPrivateSizes = fullScan || !snapshots.isEmpty ? [:] : cache.loadPrivateSizes()
         // A file in a changed folder may have gained or lost sharing without changing size: ask APFS again.
         if !knownPrivateSizes.isEmpty {
-            for index in toWalk + recounted {
+            for index in toWalk {
                 guard let scan = segmentScans[index] else { continue }
                 for entry in scan.entries where !entry.isHardLink {
                     knownPrivateSizes[FileKey(device: scan.device, id: entry.cloneID)] = nil
                 }
+            }
+            for key in recount.changed {
+                knownPrivateSizes[key] = nil
             }
         }
         // Asked during this walk, so they are fresh: no need to ask APFS twice.
@@ -131,7 +135,7 @@ public final class Scanner {
         let totals = Aggregator(scans: scans, knownPrivateSizes: knownPrivateSizes, isDebugging: isDebugging).run()
         let aggregated = Date()
         reporter.phase(.saving)
-        saveCache(segments: segments, scans: segmentScans, walked: Set(toWalk + recounted), eventID: eventID, volumeUUID: volumeUUID)
+        saveCache(segments: segments, scans: segmentScans, walked: Set(toWalk + recount.segments), eventID: eventID, volumeUUID: volumeUUID)
         try? cache.savePrivateSizes(totals.privateSizes)
 
         let walkedGroups = Set(toWalk.map { segments[$0].group })
@@ -221,8 +225,8 @@ public final class Scanner {
     }
 
     /// Files the last scan found in these segments, so progress can show a share. Nil before any scan.
-    private func expectedFileCount(_ segments: [Segment]) -> Int? {
-        guard let state = cache.loadState() else { return nil }
+    private static func expectedFileCount(_ segments: [Segment], state: ScanCache.State?) -> Int? {
+        guard let state else { return nil }
         let count = segments.reduce(0) { total, segment in
             total + (state.segments[segment.key]?.fileCounts.reduce(0, +) ?? 0)
         }
@@ -230,9 +234,9 @@ public final class Scanner {
     }
 
     /// Cached scans for segments FSEvents reports no change in. Empty on a full scan or a broken history.
-    private func reuseCachedScans(_ segments: [Segment], volumeUUID: String?) -> [Int: GroupScan] {
+    private func reuseCachedScans(_ segments: [Segment], state: ScanCache.State?, volumeUUID: String?) -> [Int: GroupScan] {
         guard !fullScan,
-              let state = cache.loadState(),
+              let state,
               state.volumeUUID != nil,
               state.volumeUUID == volumeUUID else { return [:] }
         let roots = Array(Set(segments.filter(\.filesOnly).map(\.path)))
@@ -252,47 +256,49 @@ public final class Scanner {
 
     /// Clone ids and hard-linked inodes that the last scan saw in segments that are now walked again
     /// or gone. Copies of these files in reused segments may have lost a sibling.
-    private func departedSharedFiles(walking toWalk: [Int], segments: [Segment]) -> Set<FileKey> {
-        guard let state = cache.loadState() else { return [] }
+    private func departedSharedFiles(walking toWalk: [Int], segments: [Segment], state: ScanCache.State?) -> Set<FileKey> {
+        guard let state else { return [] }
         let current = Set(segments.map(\.key))
         let keys = toWalk.map { segments[$0].key } + state.segments.keys.filter { !current.contains($0) }
-        var departed = Set<FileKey>()
-        for key in keys {
-            guard let cached = state.segments[key], cached.entryCount > 0, let scan = cache.loadScan(key: key, cached: cached) else { continue }
-            for entry in scan.entries {
-                departed.insert(FileKey(device: scan.device, id: entry.isHardLink ? entry.inode : entry.cloneID))
-            }
+        let departed = Locked(Set<FileKey>())
+        DispatchQueue.concurrentPerform(iterations: keys.count) { position in
+            let key = keys[position]
+            guard let cached = state.segments[key], cached.entryCount > 0, let scan = cache.loadScan(key: key, cached: cached) else { return }
+            let found = Set(scan.entries.map { FileKey(device: scan.device, id: $0.isHardLink ? $0.inode : $0.cloneID) })
+            departed.withLock { $0.formUnion(found) }
         }
-        return departed
+        return departed.withLock { $0 }
     }
 
     /// Re-reads the copy count of every reused entry whose family had a member in `departed`.
-    /// Returns the segments whose counts changed: they are saved again and their private sizes asked again.
-    static func refreshCopyCounts(in scans: inout [Int: GroupScan], sharedWith departed: Set<FileKey>) -> [Int] {
-        guard !departed.isEmpty else { return [] }
+    /// Returns the segments whose counts changed, which are saved again, and the files that changed,
+    /// whose private sizes are asked again.
+    static func refreshCopyCounts(in scans: inout [Int: GroupScan], sharedWith departed: Set<FileKey>) -> (segments: [Int], changed: Set<FileKey>) {
+        guard !departed.isEmpty else { return ([], []) }
         let indices = Array(scans.keys)
         let updated = Locked([Int: GroupScan]())
+        let changedKeys = Locked(Set<FileKey>())
         DispatchQueue.concurrentPerform(iterations: indices.count) { position in
             let index = indices[position]
             guard var scan = scans[index] else { return }
-            let probe = CopyCountProbe()
-            var changed = false
+            let probe = FileProbe()
+            var changed = Set<FileKey>()
             for offset in scan.entries.indices {
                 let entry = scan.entries[offset]
                 let key = FileKey(device: scan.device, id: entry.isHardLink ? entry.inode : entry.cloneID)
                 guard departed.contains(key), let copies = probe.copies(of: entry, device: scan.device), copies != entry.copies else { continue }
                 scan.entries[offset].copies = copies
-                changed = true
+                changed.insert(key)
             }
-            if changed {
-                updated.withLock { $0[index] = scan }
-            }
+            guard !changed.isEmpty else { return }
+            updated.withLock { $0[index] = scan }
+            changedKeys.withLock { $0.formUnion(changed) }
         }
         let refreshed = updated.withLock { $0 }
         for (index, scan) in refreshed {
             scans[index] = scan
         }
-        return Array(refreshed.keys)
+        return (Array(refreshed.keys), changedKeys.withLock { $0 })
     }
 
     /// Maps each change to the deepest segment above it. A change in a group root itself
@@ -353,7 +359,7 @@ public final class Scanner {
         }
     }
 
-    private static func volume(_ path: String) -> VolumeInfo {
+    static func volume(_ path: String) -> VolumeInfo {
         var info = statfs()
         guard statfs(path, &info) == 0 else {
             return VolumeInfo(totalBytes: 0, freeBytes: 0, availableForImportantUsageBytes: nil)
@@ -379,26 +385,30 @@ public final class Scanner {
 
 /// Works out the final frees-alone bytes of each group once it is fully read, off the walker threads.
 private final class GroupFinisher: @unchecked Sendable {
-    private let queue = DispatchQueue(label: "sizeberg.group-finisher")
+    private let queue = DispatchQueue(label: "sizeberg.group-finisher", qos: .utility, attributes: .concurrent)
+    private let pending = DispatchGroup()
     private let reporter: ProgressReporter
-    private let probe = PrivateSizeProbe()
-    private var privateSizes: [KnownPrivateSize] = []
+    private let privateSizes = Locked([KnownPrivateSize]())
 
     init(reporter: ProgressReporter) {
         self.reporter = reporter
     }
 
-    func add(group: Int, scan: GroupScan) {
-        queue.async {
-            let result = Aggregator.freeableAlone(of: scan, probe: self.probe)
-            self.privateSizes += result.privateSizes
+    /// `parts` are the group's segment scans, cached and walked; they are merged here, not on a walker thread.
+    func add(group: Int, parts: [GroupScan]) {
+        queue.async(group: pending) {
+            var scan = GroupScan()
+            parts.forEach { scan.merge($0) }
+            let result = Aggregator.freeableAlone(of: scan, probe: FileProbe())
+            self.privateSizes.withLock { $0 += result.privateSizes }
             self.reporter.finished(group: group, freeableAloneBytes: result.bytes)
         }
     }
 
     /// Waits for groups still being worked out, then returns every private size asked so far.
     func waitForAll() -> [KnownPrivateSize] {
-        queue.sync { privateSizes }
+        pending.wait()
+        return privateSizes.withLock { $0 }
     }
 }
 

@@ -64,7 +64,6 @@ struct SizeBreakdown: View {
                             .gridColumnAlignment(.trailing)
                         Text(part.detail)
                             .foregroundStyle(.secondary)
-                            .lineLimit(3)
                     }
                 }
             }

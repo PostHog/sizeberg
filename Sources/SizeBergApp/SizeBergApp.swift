@@ -38,6 +38,10 @@ struct SizeBergApp: App {
                 Divider()
                 Toggle("Hide Items Under 50 MB", isOn: $model.hideSmall)
                 Toggle("Group Worktrees Under Main Checkout", isOn: $model.groupWorktrees)
+                Button("Collapse All Repositories") { model.collapseAllRepositories() }
+                    .disabled(!model.groupWorktrees)
+                Button("Expand All Repositories") { model.collapsedRepositories.removeAll() }
+                    .disabled(!model.groupWorktrees)
                 Divider()
             }
             CommandGroup(after: .sidebar) {

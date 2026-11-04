@@ -209,8 +209,9 @@ final class Walker: @unchecked Sendable {
     private let startedAt = Date()
     /// Seconds since the walk started at which each segment finished, for `SIZEBERG_TRACE`.
     let segmentFinishTimes = Locked([Int: Double]())
-    /// What workers read, per segment. Workers add each unit here before they finish it.
-    private let collected = Locked([Int: (group: Int, scan: GroupScan)]())
+    /// What workers read, per segment, one part per walked unit. Workers add a part before they finish the unit;
+    /// appending keeps the lock short, and the parts are merged later, off the walker threads.
+    private let collected = Locked([Int: (group: Int, parts: [GroupScan])]())
     /// Called with a group's walked segment scans once every segment of the group is read.
     private let onGroupRead: (@Sendable (Int, [GroupScan]) -> Void)?
 
@@ -246,18 +247,16 @@ final class Walker: @unchecked Sendable {
             scans[index] = GroupScan()
         }
         for (index, value) in collected.withLock({ $0 }) {
-            scans[index] = value.scan
+            var scan = GroupScan()
+            value.parts.forEach { scan.merge($0) }
+            scans[index] = scan
         }
         return scans
     }
 
     func collect(_ scan: GroupScan, segment: Int, group: Int) {
         collected.withLock { value in
-            if value[segment] == nil {
-                value[segment] = (group, scan)
-            } else {
-                value[segment]?.scan.merge(scan)
-            }
+            value[segment, default: (group, [])].parts.append(scan)
         }
     }
 
@@ -296,8 +295,8 @@ final class Walker: @unchecked Sendable {
             return value.segmentsLeft[finishedGroup] == 0
         }
         if groupRead, let finishedGroup, let onGroupRead {
-            let scans = collected.withLock { value in value.values.filter { $0.group == finishedGroup }.map(\.scan) }
-            onGroupRead(finishedGroup, scans)
+            let parts = collected.withLock { value in value.values.filter { $0.group == finishedGroup }.flatMap(\.parts) }
+            onGroupRead(finishedGroup, parts)
         }
         guard let progress else { return }
         let now = Date()

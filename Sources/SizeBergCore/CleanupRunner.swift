@@ -53,15 +53,11 @@ public enum CleanupRunner {
     static func reasonToSkip(_ step: CleanupStep) -> String? {
         guard step.kind == .worktree, FileManager.default.fileExists(atPath: step.path) else { return nil }
         guard let git = Shell.find("git") else { return "git not found." }
-        let status = Shell.run(git, ["-C", step.path, "status", "--porcelain"], timeout: 60)
-        if status.status != 0 || status.timedOut {
-            return "Could not check for uncommitted changes."
-        }
-        if !status.output.isEmpty {
+        if GitInspector.hasUncommittedChanges(at: step.path, git: git) {
             return "Has uncommitted changes now."
         }
-        let unpushed = Shell.run(git, ["-C", step.path, "rev-list", "-n", "1", "HEAD", "--not", "--remotes"])
-        if unpushed.status != 0 || !unpushed.output.isEmpty {
+        // Stricter than the scan's local-work rule: merged work no remote has is kept too.
+        if GitInspector.hasUnpushedCommits(at: step.path, git: git) {
             return "Has commits that no remote has."
         }
         return nil
@@ -85,8 +81,6 @@ public enum CleanupRunner {
 
     /// Free bytes on the volume that holds the home folder, for before and after.
     public static func freeBytes() -> Int64 {
-        var info = statfs()
-        guard statfs(NSHomeDirectory(), &info) == 0 else { return 0 }
-        return Int64(info.f_bavail) * Int64(info.f_bsize)
+        Scanner.volume(NSHomeDirectory()).freeBytes
     }
 }

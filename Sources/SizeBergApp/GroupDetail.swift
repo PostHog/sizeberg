@@ -104,7 +104,7 @@ struct GroupDetail: View {
     @ViewBuilder
     private func worktreeSummary(_ worktrees: [GroupReport]) -> some View {
         let ids = Set(worktrees.map(\.id))
-        let stale = worktrees.filter { $0.git?.status == .stale }
+        let stale = worktrees.filter(\.isStale)
         LabeledContent("Worktrees", value: "\(worktrees.count), \(stale.count) stale")
         LabeledContent("All together free") {
             Text(bytes(report.freeableBytes(selection: ids))).monospacedDigit().fontWeight(.medium)

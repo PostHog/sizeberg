@@ -47,16 +47,15 @@ extension GroupReport {
         if let quietDays {
             parts.append(quietDays < 1 ? "used today" : "quiet \(Int(quietDays)) \(Int(quietDays) == 1 ? "day" : "days")")
         }
-        let workIsFinished = git.mergedIntoDefault == true || git.upstreamGone
         if git.mergedIntoDefault == true {
             parts.append("merged")
         } else if git.upstreamGone {
             parts.append("remote gone")
         }
         // Finished work goes stale faster, but a worktree used today is still in use.
-        let scale = workIsFinished ? Self.finishedWorkQuietDaysScale : Self.quietDaysScale
+        let scale = git.workIsFinished ? Self.finishedWorkQuietDaysScale : Self.quietDaysScale
         var confidence = 1 - exp(-(quietDays ?? Self.quietDaysScale * 3) / scale)
-        let hasLocalWork = git.hasUncommittedChanges == true || (git.hasUnpushedCommits == true && git.mergedIntoDefault != true)
+        let hasLocalWork = git.hasLocalWork
         if hasLocalWork {
             parts.append("local work")
             confidence *= Self.localWorkFactor

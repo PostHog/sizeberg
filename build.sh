@@ -6,6 +6,10 @@ cd "$(dirname "$0")"
 # The macOS 27 SDK turns @State into a macro whose plugin ships only with Xcode 27, not with the
 # command line tools. The macOS 26 SDK has every Liquid Glass API used here; macOS 27 restyles them at run time.
 SDKROOT="$(xcode-select -p)/SDKs/MacOSX26.sdk"
+if [ ! -d "$SDKROOT" ]; then
+    echo "Needs the macOS 26 SDK at $SDKROOT (from the command line tools)." >&2
+    exit 1
+fi
 export SDKROOT
 
 swift build -c release

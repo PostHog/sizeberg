@@ -23,9 +23,11 @@ struct CopyCountRefreshTests {
         scan.entries = [SharedEntry(cloneID: 7, inode: UInt64(info.st_ino), allocatedBytes: 64 * 1024, copies: 2, kind: .source)]
         var scans = [0: scan]
 
-        let recounted = Scanner.refreshCopyCounts(in: &scans, sharedWith: [FileKey(device: scan.device, id: 7)])
+        let key = FileKey(device: scan.device, id: 7)
+        let recount = Scanner.refreshCopyCounts(in: &scans, sharedWith: [key])
 
-        #expect(recounted == [0])
+        #expect(recount.segments == [0])
+        #expect(recount.changed == [key])
         #expect(scans[0]?.entries.first?.copies == 1)
     }
 }

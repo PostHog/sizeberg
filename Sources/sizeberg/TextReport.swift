@@ -41,7 +41,7 @@ struct TextReport {
     }
 
     private func appendStalePlan(_ lines: inout [String]) {
-        let stale = report.groups.filter { $0.git?.status == .stale }
+        let stale = report.groups.filter(\.isStale)
         let withWork = report.groups.filter { $0.git?.status == .staleWithLocalWork }
         lines.append("")
         lines.append("Stale worktrees: \(stale.count) safe to remove, \(withWork.count) with local work")

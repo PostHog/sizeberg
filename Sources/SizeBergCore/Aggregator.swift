@@ -143,7 +143,7 @@ struct Aggregator {
     /// Frees-alone bytes of one fully read group, from its own entries only. The clone copy count says
     /// whether every full clone is inside the group, so the result matches `run()` without the other groups.
     /// Clones with an unknown copy count are left out: another group could hold a copy.
-    static func freeableAlone(of scan: GroupScan, probe: PrivateSizeProbe) -> (bytes: Int64, privateSizes: [KnownPrivateSize]) {
+    static func freeableAlone(of scan: GroupScan, probe: FileProbe) -> (bytes: Int64, privateSizes: [KnownPrivateSize]) {
         struct Count {
             var bytes: Int64 = 0
             var members: UInt32 = 0
@@ -232,7 +232,7 @@ struct Aggregator {
 
     private func summarize(_ shard: FamilyTable.Shard, bucketCount: Int) -> Partial {
         var partial = Partial(bucketCount: bucketCount)
-        let probe = PrivateSizeProbe()
+        let probe = FileProbe()
 
         for family in shard.hardLinks.values {
             // du counts a hard-linked inode once, where it first sees it.
@@ -279,7 +279,7 @@ struct Aggregator {
         return partial
     }
 
-    private func privateBytes(of key: FileKey, _ family: Family, probe: PrivateSizeProbe, into partial: inout Partial) -> Int64 {
+    private func privateBytes(of key: FileKey, _ family: Family, probe: FileProbe, into partial: inout Partial) -> Int64 {
         let blocks = UInt32(clamping: family.sharedBytes / SharedEntry.blockSize)
         if let known = knownPrivateSizes[key], known.inode == family.firstInode, known.blocks == blocks {
             partial.privateSizes.append(known)

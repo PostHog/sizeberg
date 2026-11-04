@@ -38,7 +38,7 @@ struct PlanBar: View {
     @ViewBuilder
     private var summary: some View {
         if model.selection.isEmpty {
-            let stale = report.groups.filter { $0.git?.status == .stale }.count
+            let stale = report.groups.filter(\.isStale).count
             HStack(spacing: 6) {
                 Text("\(stale) stale worktrees")
                     .fontWeight(.medium)

@@ -96,7 +96,7 @@ struct AggregatorTests {
         let result = Aggregator(scans: [first, second]).run()
         let kinds = BucketKind.allCases.count
         let reported = result.privateBytes[0..<kinds].reduce(0, +) + (result.sets[Self.set(0)]?.bytes ?? 0)
-        let live = Aggregator.freeableAlone(of: first, probe: PrivateSizeProbe()).bytes
+        let live = Aggregator.freeableAlone(of: first, probe: FileProbe()).bytes
 
         #expect(reported == 25 * Self.block)
         #expect(live == reported)

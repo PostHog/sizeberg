@@ -101,7 +101,7 @@ extension ContentView {
         guard ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT"] != nil, let report = model.report else { return }
         model.selectStale()
         model.focusedID = report.groups
-            .filter { $0.git?.status == .stale }
+            .filter(\.isStale)
             .max { $0.freeableAloneBytes < $1.freeableAloneBytes }?
             .id
         if ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT_VIEW"] == "map" {
@@ -109,7 +109,6 @@ extension ContentView {
         }
         if let name = ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT_REPO"],
            let main = report.groups.first(where: { $0.kind == .mainCheckout && $0.name == name }) {
-            model.expandedRepositories.insert(main.id)
             model.focusedID = main.id
         }
         // Opens the confirmation only; nothing runs without pressing Delete.
@@ -165,7 +164,6 @@ struct NoticeBar: View {
             Image(systemName: symbol)
                 .foregroundStyle(tint)
             Text(text)
-                .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(.callout)

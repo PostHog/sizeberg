@@ -153,3 +153,23 @@ extension Report {
         return lines.joined(separator: "\n")
     }
 }
+
+extension GitInfo {
+    /// Merged into the default branch, or the remote branch is gone: the work landed somewhere.
+    public var workIsFinished: Bool {
+        mergedIntoDefault == true || upstreamGone
+    }
+
+    /// Uncommitted changes, or commits no remote has that the default branch does not hold either.
+    /// Deleting the worktree would lose them.
+    public var hasLocalWork: Bool {
+        hasUncommittedChanges == true || (hasUnpushedCommits == true && mergedIntoDefault != true)
+    }
+}
+
+extension GroupReport {
+    /// Quiet worktree without local work: safe to propose for deletion.
+    public var isStale: Bool {
+        git?.status == .stale
+    }
+}
