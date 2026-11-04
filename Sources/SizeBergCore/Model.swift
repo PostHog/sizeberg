@@ -1,0 +1,112 @@
+import Foundation
+
+public enum BucketKind: Int, Codable, CaseIterable, Sendable {
+    case source
+    case dependencies
+    case buildOutput
+    case caches
+    case git
+
+    public var title: String {
+        switch self {
+        case .source: return "Source and other files"
+        case .dependencies: return "Dependencies"
+        case .buildOutput: return "Build output"
+        case .caches: return "Caches"
+        case .git: return "Git data"
+        }
+    }
+}
+
+public enum GroupKind: String, Codable, Sendable {
+    case mainCheckout
+    case worktree
+    case project
+    case cache
+    case system
+}
+
+public enum WorktreeStatus: String, Codable, Sendable {
+    case active
+    case stale
+    case staleWithLocalWork
+    case missing
+}
+
+public struct GitInfo: Codable, Sendable {
+    public var repoPath: String
+    public var branch: String?
+    public var headDate: Date?
+    public var lastActive: Date?
+    public var upstreamGone: Bool
+    /// The slow checks run only where they can change the status: nil means not checked.
+    /// Merge and push state for worktrees quiet for a few days, uncommitted changes for stale ones.
+    public var mergedIntoDefault: Bool?
+    public var hasUncommittedChanges: Bool?
+    public var hasUnpushedCommits: Bool?
+    public var status: WorktreeStatus
+}
+
+public struct BucketReport: Codable, Sendable {
+    public var kind: BucketKind
+    /// What `du` reports: allocated blocks, hard links counted once.
+    public var apparentBytes: Int64
+    /// Blocks only this folder holds. Deleting the folder frees at least this much.
+    public var privateBytes: Int64
+    /// Private bytes plus shared data whose every copy is inside this bucket.
+    public var freeableAloneBytes: Int64
+    public var fileCount: Int
+}
+
+public struct GroupReport: Codable, Identifiable, Sendable {
+    public var id: Int
+    public var kind: GroupKind
+    public var name: String
+    public var paths: [String]
+    public var git: GitInfo?
+    public var buckets: [BucketReport]
+    public var apparentBytes: Int64
+    public var privateBytes: Int64
+    public var freeableAloneBytes: Int64
+    public var selectable: Bool
+    public var cleanupCommand: String?
+    public var note: String?
+
+    public var path: String { paths.first ?? "" }
+}
+
+/// Shared copy-on-write data whose copies live in exactly these groups.
+/// It is freed only when all of these groups go.
+public struct SharedSet: Codable, Sendable {
+    /// Contains `Report.outsideGroupID` when a copy lives outside the scanned folders.
+    public var groupIDs: [Int]
+    public var bytes: Int64
+    public var familyCount: Int
+}
+
+public struct VolumeInfo: Codable, Sendable {
+    public var totalBytes: Int64
+    public var freeBytes: Int64
+    public var availableForImportantUsageBytes: Int64?
+}
+
+public struct Report: Codable, Sendable {
+    public static let outsideGroupID = -1
+
+    public var scannedAt: Date
+    public var durationSeconds: Double
+    public var roots: [String]
+    public var fileCount: Int
+    public var errorCount: Int
+    public var volume: VolumeInfo
+    public var localSnapshots: [String]
+    public var groups: [GroupReport]
+    public var sharedSets: [SharedSet]
+    /// Groups walked in this scan, and groups taken from the cache because FSEvents saw no change.
+    public var walkedGroupCount: Int? = nil
+    public var reusedGroupCount: Int? = nil
+    /// Bytes that clones changed after cloning still share with copies the scan cannot name.
+    /// Shown savings can be up to this much too high. See `Aggregator.Result.changedCloneBytes`.
+    public var changedCloneBytes: Int64? = nil
+    public var changedCloneFiles: Int? = nil
+}
