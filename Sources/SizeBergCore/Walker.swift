@@ -209,11 +209,21 @@ final class Walker: @unchecked Sendable {
     private let startedAt = Date()
     /// Seconds since the walk started at which each segment finished, for `SIZEBERG_TRACE`.
     let segmentFinishTimes = Locked([Int: Double]())
+    /// What workers read, per segment. Workers add each unit here before they finish it.
+    private let collected = Locked([Int: (group: Int, scan: GroupScan)]())
+    /// Called with a group's walked segment scans once every segment of the group is read.
+    private let onGroupRead: (@Sendable (Int, [GroupScan]) -> Void)?
 
     /// `initial` holds the totals of segments that need no walk, such as cached ones.
-    init(groups: [WalkGroup], initial: WalkProgress, progress: (@Sendable (WalkProgress) -> Void)?) {
+    init(
+        groups: [WalkGroup],
+        initial: WalkProgress,
+        progress: (@Sendable (WalkProgress) -> Void)?,
+        onGroupRead: (@Sendable (Int, [GroupScan]) -> Void)? = nil
+    ) {
         self.groups = groups
         self.progress = progress
+        self.onGroupRead = onGroupRead
         live = Locked(initial)
     }
 
@@ -235,12 +245,20 @@ final class Walker: @unchecked Sendable {
         for index in indices {
             scans[index] = GroupScan()
         }
-        for worker in workers {
-            for (index, scan) in worker.scans {
-                scans[index, default: GroupScan()].merge(scan)
-            }
+        for (index, value) in collected.withLock({ $0 }) {
+            scans[index] = value.scan
         }
         return scans
+    }
+
+    func collect(_ scan: GroupScan, segment: Int, group: Int) {
+        collected.withLock { value in
+            if value[segment] == nil {
+                value[segment] = (group, scan)
+            } else {
+                value[segment]?.scan.merge(scan)
+            }
+        }
     }
 
     /// Threads mostly wait in the kernel for metadata, so more threads than performance cores help,
@@ -265,17 +283,21 @@ final class Walker: @unchecked Sendable {
 
     /// Adds a worker's totals since its last report. Calls `progress` a few times per second at most.
     func report(_ delta: WorkerTally, finishedSegmentOf finishedGroup: Int?) {
-        live.withLock { value in
+        let groupRead = live.withLock { value -> Bool in
             value.filesRead += delta.files
             if delta.group >= 0 {
                 value.apparentBytes[delta.group] += delta.apparentBytes
                 value.confirmedFreeableBytes[delta.group] += delta.confirmedFreeableBytes
                 value.fileCounts[delta.group] += delta.files
             }
-            if let finishedGroup {
-                value.segmentsDone += 1
-                value.segmentsLeft[finishedGroup] -= 1
-            }
+            guard let finishedGroup else { return false }
+            value.segmentsDone += 1
+            value.segmentsLeft[finishedGroup] -= 1
+            return value.segmentsLeft[finishedGroup] == 0
+        }
+        if groupRead, let finishedGroup, let onGroupRead {
+            let scans = collected.withLock { value in value.values.filter { $0.group == finishedGroup }.map(\.scan) }
+            onGroupRead(finishedGroup, scans)
         }
         guard let progress else { return }
         let now = Date()
@@ -303,7 +325,6 @@ final class WalkWorker {
     private let queue: WorkQueue
     private let reader = BulkReader()
 
-    private(set) var scans: [Int: GroupScan] = [:]
     private var tally = WorkerTally()
 
     init(walker: Walker, queue: WorkQueue) {
@@ -313,10 +334,10 @@ final class WalkWorker {
 
     func drain() {
         while let unit = queue.next() {
-            var scan = scans.removeValue(forKey: unit.segment) ?? GroupScan()
+            var scan = GroupScan()
             tally = WorkerTally(group: unit.group)
             walk(unit, into: &scan)
-            scans[unit.segment] = scan
+            walker.collect(scan, segment: unit.segment, group: unit.group)
             let segmentDone = queue.finish(unit)
             if segmentDone {
                 walker.noteFinished(segment: unit.segment)

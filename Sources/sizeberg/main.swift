@@ -61,7 +61,7 @@ let showProgress = isatty(STDERR_FILENO) == 1
 /// Debug aid: one line per update with elapsed time and totals, to measure how fast numbers settle.
 let logsProgress = ProcessInfo.processInfo.environment["SIZEBERG_PROGRESS_LOG"] != nil
 let scanner = Scanner(roots: roots, fullScan: fullScan) { progress in
-    let confirmed = progress.groups.reduce(Int64(0)) { $0 + $1.confirmedFreeableBytes }
+    let confirmed = progress.knownFreeableBytes
     if logsProgress {
         let elapsed = Date().timeIntervalSince(progress.startedAt)
         let line = String(

@@ -31,9 +31,9 @@ Inside each folder, files land in buckets: dependencies (`node_modules`, venvs),
 Measured on an M-series MacBook with 18 million files in the scanned folders.
 
 - **First scan**: 80 to 90 seconds when macOS still has much of the file metadata in memory, up to about 3 minutes after a restart. Reading that much metadata is the floor: even a catalog scan of the whole volume with `searchfs` takes about 2 minutes.
-- **Useful numbers early**: caches, build output, git data and source are read first, dependency trees last. Dependency trees hold half the files but little of what deleting frees. Each folder shows "frees at least" while the scan runs: files that share no blocks with anything count as soon as they are read. On the test machine, 90% of the final total showed after 37 seconds of an 89 second scan (78 seconds in plain depth-first order).
+- **Useful numbers early**: caches, build output, git data and source are read first, dependency trees last. Dependency trees hold half the files but little of what deleting frees. While the scan runs, each item shows "at least" what is certain so far. Once its last folder is read it says Final: the clone copy count tells whether every copy is inside the item, so its number is exact without waiting for the rest. On the test machine, 77% of the final total showed after 25 seconds and 95% after 37 seconds of an 80 second scan.
 - **Rescans**: about 5 seconds. They ask the FSEvents history which folders changed since the last scan and walk only those. Each top-level folder of a worktree or cache is cached on its own, so an edit in `frontend/src` re-walks `frontend`, not `node_modules`.
-- **Progress**: rescans and full scans show a share and time left, from the last scan's file counts. A first scan shows folders done and time spent.
+- **Progress**: rescans and full scans show a share and time left, from the last scan's file counts. A first scan shows folders done and time spent. A full scan shows the live table with the last scan's numbers as dashed bars.
 - The cache lives in `~/Library/Caches/sizeberg/groups` (about 250 MB for 18 million files). `--full`, or Full Scan in the app, ignores it.
 - The scan turns off access time updates for its own reads, so reading folders writes no metadata.
 

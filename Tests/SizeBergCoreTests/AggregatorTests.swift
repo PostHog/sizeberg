@@ -77,6 +77,31 @@ struct AggregatorTests {
         #expect(result.sets[Self.set(0, outside: true)]?.bytes == 10 * Self.block)
     }
 
+    /// The live "Final" number of a fully read group must match what the full aggregation reports for it.
+    @Test func finalNumberFromOneGroupMatchesFullAggregation() {
+        let link = SharedEntry(cloneID: 0, inode: 107, allocatedBytes: 10 * Self.block, copies: 2, flags: SharedEntry.hardLinkFlag, kind: .source)
+        var first = Self.scan([
+            // Both full clones inside: frees alone.
+            Self.clone(1, inode: 100, copies: 2), Self.clone(1, inode: 101, copies: 2),
+            // The other full clone is in the second group.
+            Self.clone(2, inode: 102, copies: 2),
+            // A third full clone is outside the scan.
+            Self.clone(3, inode: 103, copies: 3), Self.clone(3, inode: 104, copies: 3),
+            // Both links of one inode: frees alone.
+            link, link,
+        ])
+        first.unsharedBytes[Self.source] = 5 * Self.block
+        let second = Self.scan([Self.clone(2, inode: 200, copies: 2)])
+
+        let result = Aggregator(scans: [first, second]).run()
+        let kinds = BucketKind.allCases.count
+        let reported = result.privateBytes[0..<kinds].reduce(0, +) + (result.sets[Self.set(0)]?.bytes ?? 0)
+        let live = Aggregator.freeableAlone(of: first, probe: PrivateSizeProbe()).bytes
+
+        #expect(reported == 25 * Self.block)
+        #expect(live == reported)
+    }
+
     @Test func sameCloneIDOnTwoVolumesIsTwoFamilies() {
         let known: [FileKey: KnownPrivateSize] = [
             FileKey(device: 1, id: 7): KnownPrivateSize(cloneID: 7, inode: 100, privateBytes: 10 * Self.block, blocks: 10, device: 1),

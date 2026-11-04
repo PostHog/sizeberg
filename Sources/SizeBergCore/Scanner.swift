@@ -68,10 +68,26 @@ public final class Scanner {
         if progress != nil {
             walkProgress = { reporter.reading($0) }
         }
-        let walker = Walker(groups: walkGroups, initial: reporter.settle(from: segmentScans), progress: walkProgress)
+        var onGroupRead: (@Sendable (Int, [GroupScan]) -> Void)?
+        let finisher = GroupFinisher(reporter: reporter)
+        if progress != nil {
+            let cachedScans = segmentScans
+            onGroupRead = { group, walkedScans in
+                var scan = GroupScan()
+                for (index, cached) in cachedScans where segments[index].group == group {
+                    scan.merge(cached)
+                }
+                walkedScans.forEach { scan.merge($0) }
+                finisher.add(group: group, scan: scan)
+            }
+        }
+        let walker = Walker(
+            groups: walkGroups, initial: reporter.settle(from: segmentScans), progress: walkProgress, onGroupRead: onGroupRead
+        )
         for (index, scan) in walker.run(segments, indices: toWalk) {
             segmentScans[index] = scan
         }
+        let livePrivateSizes = finisher.waitForAll()
         let walked = Date()
         if let tracePath = ProcessInfo.processInfo.environment["SIZEBERG_TRACE"] {
             Self.writeTrace(to: tracePath, segments: segments, specs: specs, finishTimes: walker.segmentFinishTimes.withLock { $0 })
@@ -100,6 +116,10 @@ public final class Scanner {
                     knownPrivateSizes[FileKey(device: scan.device, id: entry.cloneID)] = nil
                 }
             }
+        }
+        // Asked during this walk, so they are fresh: no need to ask APFS twice.
+        for record in livePrivateSizes {
+            knownPrivateSizes[record.key] = record
         }
         let totals = Aggregator(scans: scans, knownPrivateSizes: knownPrivateSizes, isDebugging: isDebugging).run()
         let aggregated = Date()
@@ -131,6 +151,12 @@ public final class Scanner {
             dockerUsage: dockerUsage.value()
         ).build(start: start, roots: roots, volume: Self.volume(home), snapshots: snapshots)
         report.walkedGroupCount = walkedGroups.count
+        if isDebugging {
+            let live = reporter.finalBytes()
+            let off = live.filter { group, bytes in report.groups[group].freeableAloneBytes != bytes }
+            let worst = off.map { abs(report.groups[$0.key].freeableAloneBytes - $0.value) }.max() ?? 0
+            FileHandle.standardError.write(Data("live finals: \(live.count) groups, \(off.count) differ from the report, worst by \(worst) bytes\n".utf8))
+        }
         report.changedCloneBytes = totals.changedCloneBytes
         report.changedCloneFiles = totals.changedCloneFiles
         report.reusedGroupCount = scans.indices.filter { scans[$0] != nil && !walkedGroups.contains($0) }.count
@@ -299,6 +325,31 @@ public final class Scanner {
     }
 }
 
+/// Works out the final frees-alone bytes of each group once it is fully read, off the walker threads.
+private final class GroupFinisher: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "sizeberg.group-finisher")
+    private let reporter: ProgressReporter
+    private let probe = PrivateSizeProbe()
+    private var privateSizes: [KnownPrivateSize] = []
+
+    init(reporter: ProgressReporter) {
+        self.reporter = reporter
+    }
+
+    func add(group: Int, scan: GroupScan) {
+        queue.async {
+            let result = Aggregator.freeableAlone(of: scan, probe: self.probe)
+            self.privateSizes += result.privateSizes
+            self.reporter.finished(group: group, freeableAloneBytes: result.bytes)
+        }
+    }
+
+    /// Waits for groups still being worked out, then returns every private size asked so far.
+    func waitForAll() -> [KnownPrivateSize] {
+        queue.sync { privateSizes }
+    }
+}
+
 /// Turns walker totals into `ScanProgress` with group names, from any thread.
 private final class ProgressReporter: @unchecked Sendable {
     private let specs: [GroupSpec]
@@ -308,6 +359,10 @@ private final class ProgressReporter: @unchecked Sendable {
     private let expectedFiles: Int?
     private let progress: (@Sendable (ScanProgress) -> Void)?
     private let latest: Locked<WalkProgress>
+    /// Final frees-alone bytes of groups that are fully read.
+    private let finals = Locked([Int: Int64]())
+    /// Walker threads and the group finisher both send updates. One at a time keeps them in order.
+    private let emitting = NSLock()
 
     init(specs: [GroupSpec], segments: [Segment], startedAt: Date, expectedFiles: Int?, progress: (@Sendable (ScanProgress) -> Void)?) {
         self.specs = specs
@@ -341,16 +396,32 @@ private final class ProgressReporter: @unchecked Sendable {
     }
 
     func reading(_ value: WalkProgress) {
-        latest.withLock { $0 = value }
-        emit(.reading, value)
+        emitting.withLock {
+            latest.withLock { $0 = value }
+            emit(.reading, value)
+        }
+    }
+
+    func finalBytes() -> [Int: Int64] {
+        finals.withLock { $0 }
+    }
+
+    func finished(group: Int, freeableAloneBytes: Int64) {
+        emitting.withLock {
+            finals.withLock { $0[group] = freeableAloneBytes }
+            emit(.reading, latest.withLock { $0 })
+        }
     }
 
     func phase(_ phase: ScanProgress.Phase) {
-        emit(phase, latest.withLock { $0 })
+        emitting.withLock {
+            emit(phase, latest.withLock { $0 })
+        }
     }
 
     private func emit(_ phase: ScanProgress.Phase, _ value: WalkProgress) {
         guard let progress else { return }
+        let finals = finals.withLock { $0 }
         let groups = specs.indices.compactMap { index -> ScanProgress.Group? in
             let spec = specs[index]
             guard spec.isWalked else { return nil }
@@ -362,6 +433,7 @@ private final class ProgressReporter: @unchecked Sendable {
                 fileCount: value.fileCounts[index],
                 apparentBytes: value.apparentBytes[index],
                 confirmedFreeableBytes: value.confirmedFreeableBytes[index],
+                finalFreeableBytes: finals[index],
                 foldersLeft: value.segmentsLeft[index],
                 foldersTotal: segmentCounts[index]
             )

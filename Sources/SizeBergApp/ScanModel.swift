@@ -17,6 +17,8 @@ final class ScanModel: ObservableObject {
 
     @Published private(set) var report: Report?
     @Published private(set) var isScanning = false
+    /// A full scan shows the live table over the old report, with the old numbers for comparison.
+    @Published private(set) var isFullScan = false
     /// Live totals of the running scan. Nil when no scan runs.
     @Published private(set) var progress: ScanProgress?
     @Published var selection: Set<Int> = []
@@ -27,17 +29,20 @@ final class ScanModel: ObservableObject {
     @Published var copiedPlan = false
 
     init() {
-        // Debug aid for SIZEBERG_SNAPSHOT: start without a report, so the snapshot shows a first scan.
-        guard ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT_SCAN"] == nil else {
-            DispatchQueue.main.async { self.scan(full: true) }
-            return
+        // Debug aid for SIZEBERG_SNAPSHOT: "first" starts without a report, "full" runs a full scan over it.
+        let snapshotScan = ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT_SCAN"]
+        if snapshotScan != "first" {
+            report = Report.loadCached()
         }
-        report = Report.loadCached()
+        if snapshotScan != nil {
+            DispatchQueue.main.async { self.scan(full: true) }
+        }
     }
 
     func scan(full: Bool = false) {
         guard !isScanning else { return }
         isScanning = true
+        isFullScan = full
         progress = nil
         let (updates, progressInput) = AsyncStream.makeStream(of: ScanProgress.self, bufferingPolicy: .bufferingNewest(1))
         Task {
@@ -68,6 +73,7 @@ final class ScanModel: ObservableObject {
     private func finish(with report: Report) {
         self.report = report
         isScanning = false
+        isFullScan = false
         progress = nil
         selection.removeAll()
         focusedID = nil

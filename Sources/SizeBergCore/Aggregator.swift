@@ -140,6 +140,58 @@ struct Aggregator {
         return result
     }
 
+    /// Frees-alone bytes of one fully read group, from its own entries only. The clone copy count says
+    /// whether every full clone is inside the group, so the result matches `run()` without the other groups.
+    /// Clones with an unknown copy count are left out: another group could hold a copy.
+    static func freeableAlone(of scan: GroupScan, probe: PrivateSizeProbe) -> (bytes: Int64, privateSizes: [KnownPrivateSize]) {
+        struct Count {
+            var bytes: Int64 = 0
+            var members: UInt32 = 0
+            var expected: UInt32 = 0
+            var inode: UInt64 = 0
+            var sharesBlocksOutside = false
+        }
+        var clones: [UInt64: Count] = [:]
+        var hardLinks: [UInt64: Count] = [:]
+        for entry in scan.entries {
+            if entry.isHardLink {
+                var count = hardLinks[entry.inode] ?? Count()
+                count.bytes = max(count.bytes, entry.allocatedBytes)
+                count.members += 1
+                count.expected = UInt32(entry.copies)
+                count.sharesBlocksOutside = count.sharesBlocksOutside || entry.isClonedElsewhere
+                hardLinks[entry.inode] = count
+            } else {
+                var count = clones[entry.cloneID] ?? Count()
+                count.bytes = max(count.bytes, entry.allocatedBytes)
+                count.members += 1
+                count.expected = max(count.expected, UInt32(entry.copies))
+                count.inode = entry.inode
+                clones[entry.cloneID] = count
+            }
+        }
+
+        var total = scan.unsharedBytes.reduce(0, +)
+        var privateSizes: [KnownPrivateSize] = []
+        for count in hardLinks.values where count.members >= count.expected && !count.sharesBlocksOutside {
+            total += count.bytes
+        }
+        for (cloneID, count) in clones where count.expected <= count.members {
+            if count.members > 1 {
+                if count.expected > 0 {
+                    total += count.bytes
+                }
+                continue
+            }
+            let ownBytes = probe.privateBytes(device: scan.device, inode: count.inode)
+                .map { min(max($0, 0), count.bytes) } ?? 0
+            total += ownBytes
+            let blocks = UInt32(clamping: count.bytes / SharedEntry.blockSize)
+            privateSizes.append(KnownPrivateSize(cloneID: cloneID, inode: count.inode, privateBytes: ownBytes, blocks: blocks, device: scan.device))
+        }
+        return (total, privateSizes)
+    }
+
     /// Each thread reads every entry but keeps only keys of its own shard: a few cheap passes
     /// over memory beat millions of locked dictionary updates.
     private func buildFamilies() -> FamilyTable {

@@ -6,10 +6,10 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if let report = model.report {
+            if let progress = model.progress, progress.phase != .discovering, model.report == nil || model.isFullScan {
+                ScanningView(progress: progress, previous: model.report)
+            } else if let report = model.report {
                 MainView(report: report)
-            } else if let progress = model.progress, progress.phase != .discovering {
-                ScanningView(progress: progress)
             } else {
                 EmptyStateView()
             }
@@ -357,14 +357,11 @@ struct GroupDetail: View {
             if let git = group.git {
                 gitFacts(git)
             }
+            if group.kind != .system, group.apparentBytes > 0 {
+                SizeBreakdown(report: report, group: group)
+            }
             if !group.buckets.isEmpty {
                 bucketGrid
-            }
-            let shared = report.sharedWithOthersBytes(group.id)
-            if shared > 0 {
-                Text("\(bytes(shared)) more is shared with other folders or caches. It frees only when every copy goes.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
             }
             if let note = group.note {
                 Text(note)
