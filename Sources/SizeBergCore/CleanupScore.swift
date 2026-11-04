@@ -22,6 +22,8 @@ extension GroupReport {
     static let finishedWorkQuietDaysScale = 3.0
     /// Local work can be lost, so it ranks far lower however quiet it is.
     static let localWorkFactor = 0.3
+    /// The scan runs git status only for stale worktrees. Elsewhere uncommitted work is unknown, not absent.
+    static let uncheckedFactor = 0.5
     /// A folder outside git has no merge state to go on.
     static let folderFactor = 0.5
 
@@ -59,6 +61,12 @@ extension GroupReport {
         if hasLocalWork {
             parts.append("local work")
             confidence *= Self.localWorkFactor
+        } else if git.hasUncommittedChanges == nil {
+            confidence *= Self.uncheckedFactor
+            // Only worth saying where it holds a quiet worktree back; in-use ones rank low anyway.
+            if (quietDays ?? 0) >= 3 {
+                parts.append("changes not checked")
+            }
         }
         if kind == .project {
             confidence *= Self.folderFactor

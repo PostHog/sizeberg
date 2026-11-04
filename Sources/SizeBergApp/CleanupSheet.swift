@@ -41,11 +41,11 @@ struct CleanupSheet: View {
         switch session.phase {
         case .confirm:
             VStack(alignment: .leading, spacing: 6) {
-                Text("Delete \(session.items.count) \(session.items.count == 1 ? "item" : "items")?")
+                Text("Delete \(session.itemCount) \(session.itemCount == 1 ? "item" : "items")?")
                     .font(.title2.weight(.semibold))
                 Text("This frees about \(bytes(session.expectedBytes)). Deleted files do not go to the Trash and cannot be restored.")
                     .foregroundStyle(.secondary)
-                Text("Each worktree is checked again first. One with uncommitted changes or commits no remote has is skipped.")
+                Text("Each worktree and folder is checked again first. A worktree with uncommitted changes or commits no remote has is skipped, and so is a folder that changed since the scan.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -59,7 +59,7 @@ struct CleanupSheet: View {
                 Text("Freed \(bytes(session.freedBytes))")
                     .font(.title2.weight(.semibold))
                     .monospacedDigit()
-                Text("The scan expected \(bytes(session.expectedBytes)) for the steps that ran. Other programs writing at the same time move the free space too.")
+                Text("The scan expected \(bytes(session.doneExpectedBytes)) for the steps that ran. Other programs writing at the same time move the free space too.")
                     .foregroundStyle(.secondary)
             }
         }
@@ -73,7 +73,7 @@ struct CleanupSheet: View {
             case .confirm:
                 Button("Cancel", role: .cancel) { model.closeCleanup() }
                     .keyboardShortcut(.cancelAction)
-                Button("Delete \(session.items.count) \(session.items.count == 1 ? "Item" : "Items")", role: .destructive) {
+                Button("Delete \(session.itemCount) \(session.itemCount == 1 ? "Item" : "Items")", role: .destructive) {
                     model.runCleanup()
                 }
                 .buttonStyle(.glassProminent)
@@ -99,7 +99,7 @@ private struct StepRow: View {
             statusIcon
                 .frame(width: 16)
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.step.name)
+                Text(item.step.groupIDs.count > 1 ? "\(item.step.name) and \(item.step.groupIDs.count - 1) more" : item.step.name)
                 Text(item.step.command)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)

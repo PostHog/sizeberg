@@ -28,7 +28,8 @@ struct CleanupScoreTests {
 
     @Test func quietMergedWorkRanksAboveBiggerItemsInUseOrWithLocalWork() {
         let inUse = Self.worktree("in-use", gigabytes: 6, quietDays: 0.2, merged: nil)
-        let finished = Self.worktree("finished", gigabytes: 2, quietDays: 10, merged: true)
+        // The scan checks git status for stale worktrees, so a quiet finished one has a known answer.
+        let finished = Self.worktree("finished", gigabytes: 2, quietDays: 10, merged: true, uncommitted: false)
         let localWork = Self.worktree("local-work", gigabytes: 6, quietDays: 30, merged: false, uncommitted: true)
 
         let ranked = [inUse, localWork, finished]

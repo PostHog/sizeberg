@@ -76,8 +76,13 @@ final class ScanModel {
         DispatchQueue.main.async { self.scan(full: true) }
     }
 
+    /// A scan or a cleanup is running: scanning while folders are deleted would report a half state.
+    var isBusy: Bool {
+        isScanning || cleanup?.phase == .running
+    }
+
     func scan(full: Bool = false) {
-        guard !isScanning else { return }
+        guard !isBusy else { return }
         isScanning = true
         isFullScan = full
         progress = nil
@@ -100,7 +105,7 @@ final class ScanModel {
 
     /// Forgets every earlier scan, so the next one shows the first-scan screen and timing.
     func clearCache() {
-        guard !isScanning else { return }
+        guard !isBusy else { return }
         try? Report.clearCaches()
         report = nil
         selection.removeAll()
@@ -198,12 +203,12 @@ final class ScanModel {
 
     /// Opens the confirmation sheet for the selection.
     func prepareCleanup() {
-        guard let report, !selection.isEmpty, !isScanning else { return }
+        guard let report, !selection.isEmpty, !isScanning, cleanup == nil else { return }
         let plan = CleanupRunner.plan(for: report, selection: selection)
         cleanup = CleanupSession(
             items: plan.steps.map { CleanupSession.Item(step: $0) },
-            manual: plan.manual.map { CleanupSession.Manual(name: $0.name, reason: $0.reason) },
-            expectedBytes: report.freeableBytes(selection: Set(plan.steps.map(\.id)))
+            manual: plan.manual.map { CleanupSession.Manual(id: $0.id, name: $0.name, reason: CleanupRunner.reasonNotIncluded($0)) },
+            expectedBytes: report.freeableBytes(selection: Set(plan.steps.flatMap(\.groupIDs)))
         )
     }
 
@@ -220,9 +225,11 @@ final class ScanModel {
                 let outcome = await Task.detached(priority: .userInitiated) { CleanupRunner.run(step) }.value
                 cleanup?.items[index].status = .finished(outcome)
                 if outcome == .done {
-                    selection.remove(step.id)
+                    selection.subtract(step.groupIDs)
                 }
             }
+            let done = (cleanup?.items ?? []).filter { $0.status == .finished(.done) }.flatMap(\.step.groupIDs)
+            cleanup?.doneExpectedBytes = report?.freeableBytes(selection: Set(done)) ?? 0
             cleanup?.freeAfter = CleanupRunner.freeBytes()
             cleanup?.phase = .finished
         }
@@ -269,18 +276,21 @@ struct CleanupSession {
     }
 
     struct Manual: Identifiable {
+        var id: Int
         var name: String
         var reason: String
-
-        var id: String { name }
     }
 
     var items: [Item]
     var manual: [Manual]
     var expectedBytes: Int64
+    /// What the scan expected for the steps that ran to the end.
+    var doneExpectedBytes: Int64 = 0
     var phase = Phase.confirm
     var freeBefore: Int64 = 0
     var freeAfter: Int64 = 0
 
     var freedBytes: Int64 { max(0, freeAfter - freeBefore) }
+
+    var itemCount: Int { items.reduce(0) { $0 + $1.step.groupIDs.count } }
 }

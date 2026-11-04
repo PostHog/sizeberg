@@ -25,7 +25,7 @@ struct PlanBar: View {
                     Button("Clean Up…", role: .destructive) { model.prepareCleanup() }
                         .buttonStyle(.glassProminent)
                         .tint(.red)
-                        .disabled(model.isScanning)
+                        .disabled(model.isBusy)
                         .help("Review the cleanup, then run it")
                 }
             }

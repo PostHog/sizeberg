@@ -141,8 +141,9 @@ struct Aggregator {
     }
 
     /// Frees-alone bytes of one fully read group, from its own entries only. The clone copy count says
-    /// whether every full clone is inside the group, so the result matches `run()` without the other groups.
-    /// Clones with an unknown copy count are left out: another group could hold a copy.
+    /// whether every full clone is inside the group, so this matches `run()` without the other groups,
+    /// with one deliberate difference: clones with an unknown copy count are left out, because another
+    /// group could hold a copy. The live number can then be lower than the report, never higher.
     static func freeableAlone(of scan: GroupScan, probe: FileProbe) -> (bytes: Int64, privateSizes: [KnownPrivateSize]) {
         struct Count {
             var bytes: Int64 = 0

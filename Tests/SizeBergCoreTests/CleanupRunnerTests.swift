@@ -28,7 +28,7 @@ struct CleanupRunnerTests {
 
     private static func step(repo: URL, worktree: URL) -> CleanupStep {
         CleanupStep(
-            id: 0, name: "topic", kind: .worktree, path: worktree.path,
+            groupIDs: [0], name: "topic", kind: .worktree, path: worktree.path,
             command: "git -C \(shellQuote(repo.path)) worktree remove \(shellQuote(worktree.path))", expectedBytes: 0
         )
     }
@@ -48,5 +48,27 @@ struct CleanupRunnerTests {
 
         #expect(CleanupRunner.run(Self.step(repo: repo, worktree: worktree)) == .skipped("Has uncommitted changes now."))
         #expect(FileManager.default.fileExists(atPath: worktree.appendingPathComponent("draft.txt").path))
+    }
+
+    /// Missing worktrees of one repository share one prune command. Every one of them must stay in the plan.
+    @Test func itemsSharingACommandStayInThePlan() {
+        let groups = (0..<3).map { id in
+            GroupReport(
+                id: id, kind: .worktree, name: "gone-\(id)", paths: ["/repo/gone-\(id)"], git: nil, buckets: [],
+                apparentBytes: 0, privateBytes: 0, freeableAloneBytes: 0, selectable: true,
+                cleanupCommand: "git -C '/repo' worktree prune", note: nil
+            )
+        }
+        let report = Report(
+            scannedAt: Date(), durationSeconds: 1, roots: [], fileCount: 0, errorCount: 0,
+            volume: VolumeInfo(totalBytes: 0, freeBytes: 0, availableForImportantUsageBytes: nil),
+            localSnapshots: [], groups: groups, sharedSets: []
+        )
+
+        let plan = CleanupRunner.plan(for: report, selection: [0, 1, 2])
+
+        #expect(plan.steps.count == 1)
+        #expect(plan.steps.first?.groupIDs == [0, 1, 2])
+        #expect(plan.manual.isEmpty)
     }
 }

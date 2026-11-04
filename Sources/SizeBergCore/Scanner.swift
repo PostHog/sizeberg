@@ -60,7 +60,7 @@ public final class Scanner {
         // Copy counts in reused segments go stale when a copy elsewhere is deleted or changed:
         // nothing in their own folders changes, so FSEvents says nothing. Ask APFS again for those files.
         let departed = segmentScans.isEmpty ? [] : departedSharedFiles(walking: toWalk, segments: segments, state: state)
-        let recount = Self.refreshCopyCounts(in: &segmentScans, sharedWith: departed)
+        let recount = segmentScans.isEmpty ? (segments: [], changed: []) : Self.refreshCopyCounts(in: &segmentScans, sharedWith: departed)
         if isDebugging {
             FileHandle.standardError.write(Data("copy counts: \(departed.count) departed shared files, \(recount.changed.count) changed in \(recount.segments.count) reused segments\n".utf8))
         }
@@ -270,11 +270,12 @@ public final class Scanner {
         return departed.withLock { $0 }
     }
 
-    /// Re-reads the copy count of every reused entry whose family had a member in `departed`.
+    /// Re-reads the copy count of reused entries that may be stale: families that had a member in `departed`,
+    /// and every entry that claims to be the only copy (a clone or link made outside the scanned folders
+    /// would otherwise make it look private and freeable). Counts going up elsewhere only understate.
     /// Returns the segments whose counts changed, which are saved again, and the files that changed,
     /// whose private sizes are asked again.
     static func refreshCopyCounts(in scans: inout [Int: GroupScan], sharedWith departed: Set<FileKey>) -> (segments: [Int], changed: Set<FileKey>) {
-        guard !departed.isEmpty else { return ([], []) }
         let indices = Array(scans.keys)
         let updated = Locked([Int: GroupScan]())
         let changedKeys = Locked(Set<FileKey>())
@@ -286,7 +287,10 @@ public final class Scanner {
             for offset in scan.entries.indices {
                 let entry = scan.entries[offset]
                 let key = FileKey(device: scan.device, id: entry.isHardLink ? entry.inode : entry.cloneID)
-                guard departed.contains(key), let copies = probe.copies(of: entry, device: scan.device), copies != entry.copies else { continue }
+                let claimsOnlyCopy = entry.copies <= 1 || entry.isHardLink
+                guard claimsOnlyCopy || departed.contains(key),
+                      let copies = probe.copies(of: entry, device: scan.device),
+                      copies != entry.copies else { continue }
                 scan.entries[offset].copies = copies
                 changed.insert(key)
             }

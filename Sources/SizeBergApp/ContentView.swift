@@ -72,7 +72,7 @@ struct ContentView: View {
                 Label(model.report == nil ? "Scan" : "Scan again", systemImage: "arrow.clockwise")
             }
             .help("Scan again. Only folders that changed are read.")
-            .disabled(model.isScanning)
+            .disabled(model.isBusy)
             Menu {
                 Toggle("Hide items under 50 MB", isOn: $model.hideSmall)
                 Toggle("Group worktrees under main checkout", isOn: $model.groupWorktrees)

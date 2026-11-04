@@ -17,18 +17,18 @@ struct SizeBergApp: App {
             CommandGroup(after: .newItem) {
                 Button("Scan Again") { model.scan() }
                     .keyboardShortcut("r")
-                    .disabled(model.isScanning)
+                    .disabled(model.isBusy)
                 Button("Full Scan") { model.scan(full: true) }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
-                    .disabled(model.isScanning)
+                    .disabled(model.isBusy)
                 Divider()
                 Button("Clean Up Selection…") { model.prepareCleanup() }
                     .keyboardShortcut(.delete, modifiers: [.command])
-                    .disabled(model.isScanning || model.selection.isEmpty)
+                    .disabled(model.isBusy || model.cleanup != nil || model.selection.isEmpty)
                 Divider()
                 Button("Clear Cache") { model.clearCache() }
                     .keyboardShortcut("r", modifiers: [.command, .option])
-                    .disabled(model.isScanning)
+                    .disabled(model.isBusy)
             }
             CommandGroup(before: .sidebar) {
                 Button("As List") { model.viewMode = .list }

@@ -212,6 +212,8 @@ final class Walker: @unchecked Sendable {
     /// What workers read, per segment, one part per walked unit. Workers add a part before they finish the unit;
     /// appending keeps the lock short, and the parts are merged later, off the walker threads.
     private let collected = Locked([Int: (group: Int, parts: [GroupScan])]())
+    /// Walked segments per group, set before the workers start, so a finished group finds its parts directly.
+    private let segmentsOfGroup = Locked([Int: [Int]]())
     /// Called with a group's walked segment scans once every segment of the group is read.
     private let onGroupRead: (@Sendable (Int, [GroupScan]) -> Void)?
 
@@ -235,6 +237,11 @@ final class Walker: @unchecked Sendable {
             return WalkUnit(path: segment.path, group: segment.group, segment: index, kind: segment.kind, filesOnly: segment.filesOnly)
         }
         guard !units.isEmpty else { return [:] }
+        segmentsOfGroup.withLock { value in
+            for unit in units {
+                value[unit.group, default: []].append(unit.segment)
+            }
+        }
         Self.raiseOpenFileLimit()
         let workerCount = Self.workerCount()
         let queue = WorkQueue(units: units, workerCount: workerCount)
@@ -295,7 +302,8 @@ final class Walker: @unchecked Sendable {
             return value.segmentsLeft[finishedGroup] == 0
         }
         if groupRead, let finishedGroup, let onGroupRead {
-            let parts = collected.withLock { value in value.values.filter { $0.group == finishedGroup }.flatMap(\.parts) }
+            let segments = segmentsOfGroup.withLock { $0[finishedGroup] ?? [] }
+            let parts = collected.withLock { value in segments.flatMap { value[$0]?.parts ?? [] } }
             onGroupRead(finishedGroup, parts)
         }
         guard let progress else { return }
