@@ -115,6 +115,40 @@ final class FamilyTable: @unchecked Sendable {
     }
 }
 
+/// Reads the current copy count of one file by inode, through /.vol/<device>/<inode>:
+/// full clones of its data (ATTR_CMNEXT_CLONE_REFCNT) for a clone, the link count for a hard link.
+final class CopyCountProbe {
+    // ATTR_CMNEXT_CLONE_REFCNT, read through forkattr with FSOPT_ATTR_CMN_EXTENDED.
+    private static let cloneCountBit: attrgroup_t = 0x0000_1000
+    // FSOPT_ATTR_CMN_EXTENDED | FSOPT_NOFOLLOW
+    private static let options: UInt32 = 0x20 | 0x1
+    private static let expectedLength: UInt32 = 4 + 4
+
+    private var request = attrlist()
+    private let buffer = UnsafeMutableRawPointer.allocate(byteCount: 16, alignment: 8)
+
+    init() {
+        request.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
+        request.forkattr = Self.cloneCountBit
+    }
+
+    deinit {
+        buffer.deallocate()
+    }
+
+    func copies(of entry: SharedEntry, device: Int32) -> UInt16? {
+        let path = "/.vol/\(device)/\(entry.inode)"
+        if entry.isHardLink {
+            var info = stat()
+            guard lstat(path, &info) == 0 else { return nil }
+            return UInt16(clamping: info.st_nlink)
+        }
+        guard getattrlist(path, &request, buffer, 16, Self.options) == 0,
+              buffer.loadUnaligned(fromByteOffset: 0, as: UInt32.self) == Self.expectedLength else { return nil }
+        return UInt16(clamping: buffer.loadUnaligned(fromByteOffset: 4, as: UInt32.self))
+    }
+}
+
 /// Reads ATTR_CMNEXT_PRIVATESIZE for single files by inode, through /.vol/<device>/<inode>.
 /// Used only for clones whose siblings the scan did not see. One probe per thread.
 final class PrivateSizeProbe {

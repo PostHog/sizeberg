@@ -54,6 +54,7 @@ Measured on an M-series MacBook with 18 million files in the scanned folders.
 - Local Time Machine snapshots keep old blocks, so files read as shared and deletes free less. The app warns when snapshots exist.
 - A clone that was changed after cloning gets a new clone id but can still share blocks with its old family. The scan then counts its shared part as held outside the scan, and can overstate what deleting the rest of the old family frees. On the test machine 1 of 281,000 single clones was such a file.
 - Copies outside the scanned folders are not known by name, only detected.
+- A rescan asks APFS again for the copy count of files whose clones were in changed or deleted folders. A copy deleted outside the scanned folders goes unnoticed until a full scan, and until then its siblings count as shared, never as freeable.
 - "Stale" means quiet for 3 days with merged or remote-gone work, or quiet for 21 days. It is a hint; the detail panel shows why.
 - Commands are copied, never run.
 

@@ -56,6 +56,13 @@ public final class Scanner {
 
         var segmentScans = reuseCachedScans(segments, volumeUUID: volumeUUID)
         let toWalk = segments.indices.filter { segmentScans[$0] == nil }
+        // Copy counts in reused segments go stale when a copy elsewhere is deleted or changed:
+        // nothing in their own folders changes, so FSEvents says nothing. Ask APFS again for those files.
+        let departed = segmentScans.isEmpty ? [] : departedSharedFiles(walking: toWalk, segments: segments)
+        let recounted = Self.refreshCopyCounts(in: &segmentScans, sharedWith: departed)
+        if isDebugging {
+            FileHandle.standardError.write(Data("copy counts: \(departed.count) departed shared files, \(recounted.count) reused segments recounted\n".utf8))
+        }
         let reusedAt = Date()
         let reporter = ProgressReporter(
             specs: specs,
@@ -110,7 +117,7 @@ public final class Scanner {
         var knownPrivateSizes = fullScan || !snapshots.isEmpty ? [:] : cache.loadPrivateSizes()
         // A file in a changed folder may have gained or lost sharing without changing size: ask APFS again.
         if !knownPrivateSizes.isEmpty {
-            for index in toWalk {
+            for index in toWalk + recounted {
                 guard let scan = segmentScans[index] else { continue }
                 for entry in scan.entries where !entry.isHardLink {
                     knownPrivateSizes[FileKey(device: scan.device, id: entry.cloneID)] = nil
@@ -124,7 +131,7 @@ public final class Scanner {
         let totals = Aggregator(scans: scans, knownPrivateSizes: knownPrivateSizes, isDebugging: isDebugging).run()
         let aggregated = Date()
         reporter.phase(.saving)
-        saveCache(segments: segments, scans: segmentScans, walked: Set(toWalk), eventID: eventID, volumeUUID: volumeUUID)
+        saveCache(segments: segments, scans: segmentScans, walked: Set(toWalk + recounted), eventID: eventID, volumeUUID: volumeUUID)
         try? cache.savePrivateSizes(totals.privateSizes)
 
         let walkedGroups = Set(toWalk.map { segments[$0].group })
@@ -241,6 +248,51 @@ public final class Scanner {
             reused.withLock { $0[index] = scan }
         }
         return reused.withLock { $0 }
+    }
+
+    /// Clone ids and hard-linked inodes that the last scan saw in segments that are now walked again
+    /// or gone. Copies of these files in reused segments may have lost a sibling.
+    private func departedSharedFiles(walking toWalk: [Int], segments: [Segment]) -> Set<FileKey> {
+        guard let state = cache.loadState() else { return [] }
+        let current = Set(segments.map(\.key))
+        let keys = toWalk.map { segments[$0].key } + state.segments.keys.filter { !current.contains($0) }
+        var departed = Set<FileKey>()
+        for key in keys {
+            guard let cached = state.segments[key], cached.entryCount > 0, let scan = cache.loadScan(key: key, cached: cached) else { continue }
+            for entry in scan.entries {
+                departed.insert(FileKey(device: scan.device, id: entry.isHardLink ? entry.inode : entry.cloneID))
+            }
+        }
+        return departed
+    }
+
+    /// Re-reads the copy count of every reused entry whose family had a member in `departed`.
+    /// Returns the segments whose counts changed: they are saved again and their private sizes asked again.
+    static func refreshCopyCounts(in scans: inout [Int: GroupScan], sharedWith departed: Set<FileKey>) -> [Int] {
+        guard !departed.isEmpty else { return [] }
+        let indices = Array(scans.keys)
+        let updated = Locked([Int: GroupScan]())
+        DispatchQueue.concurrentPerform(iterations: indices.count) { position in
+            let index = indices[position]
+            guard var scan = scans[index] else { return }
+            let probe = CopyCountProbe()
+            var changed = false
+            for offset in scan.entries.indices {
+                let entry = scan.entries[offset]
+                let key = FileKey(device: scan.device, id: entry.isHardLink ? entry.inode : entry.cloneID)
+                guard departed.contains(key), let copies = probe.copies(of: entry, device: scan.device), copies != entry.copies else { continue }
+                scan.entries[offset].copies = copies
+                changed = true
+            }
+            if changed {
+                updated.withLock { $0[index] = scan }
+            }
+        }
+        let refreshed = updated.withLock { $0 }
+        for (index, scan) in refreshed {
+            scans[index] = scan
+        }
+        return Array(refreshed.keys)
     }
 
     /// Maps each change to the deepest segment above it. A change in a group root itself
