@@ -31,13 +31,15 @@ struct Discovery {
     var repositories: [String] = []
     let home: String
     let git: GitInspector?
+    var scratchpads = ClaudeScratchpads()
 
     func discover() -> [GroupSpec] {
         let rootChildren = roots.flatMap { directories(in: realPath($0)) }
         var specs = repositorySpecs(rootChildren + repositories.map(realPath))
         let claimed = Set(specs.flatMap(\.paths))
         let projects = rootChildren.filter { !claimed.contains($0) }.map(projectSpec)
-        let fixed = cacheSpecs() + systemSpecs()
+        let worktrees = specs.filter { $0.gitSeed != nil }.flatMap(\.paths)
+        let fixed = cacheSpecs() + scratchpadSpecs(keeping: worktrees) + systemSpecs()
         let projectRoom = GroupSet.maxGroups - specs.count - fixed.count - 1
         specs += lumpOverflow(projects, room: projectRoom)
         specs += fixed
@@ -187,6 +189,29 @@ struct Discovery {
                 note: definition.note
             )
         }
+    }
+
+    /// One item for the scratch folders of finished Claude Code sessions. The command names each
+    /// folder, so a session that is still running keeps its own.
+    private func scratchpadSpecs(keeping worktrees: [String]) -> [GroupSpec] {
+        let sessions = scratchpads.sessions(keeping: worktrees)
+        guard !sessions.idle.isEmpty else { return [] }
+        let days = Int(ClaudeScratchpads.idleTime / 86400)
+        var note = "Scratch folders of \(sessions.idle.count) Claude Code sessions idle for \(days) days or more."
+        if sessions.activeCount > 0 {
+            note += " The \(sessions.activeCount) newer sessions keep theirs."
+        }
+        note += " A session that holds a git worktree keeps its folder; the worktree is an item of its own."
+        return [GroupSpec(
+            kind: .cache,
+            name: "Claude Code scratchpads",
+            paths: sessions.idle,
+            classify: false,
+            defaultKind: .caches,
+            gitSeed: nil,
+            cleanupCommand: "rm -rf " + sessions.idle.map(shellQuote).joined(separator: " "),
+            note: note
+        )]
     }
 
     /// pnpm keeps one store per layout version. Only the newest one is used by a current pnpm.

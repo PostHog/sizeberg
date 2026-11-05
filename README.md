@@ -39,7 +39,7 @@ See [RELEASING.md](RELEASING.md) for how releases are built, signed and publishe
 
 - Wherever you keep your code: SizeBerg walks your home folder for the first folders that hold git repositories, like `~/workspace` or `~/Documents/GitHub`, and scans each of them whole. A repository right in your home folder, like `~/dotfiles`, is an item of its own. It skips `~/Library`, hidden folders, media folders and dependency trees. `--root` scans given folders instead. If your repositories are in Documents, Desktop or Downloads, macOS asks once whether SizeBerg may read that folder.
 - Git repos and all their worktrees, also ones outside those folders, get branch, last use, merged and remote-gone state, squash merges, uncommitted changes and unpushed commits.
-- Developer caches: pnpm stores (each layout version), uv, npm, Yarn, sccache, Playwright, Cargo, Go, pip, Homebrew and more.
+- Developer caches: pnpm stores (each layout version), uv, npm, Yarn, sccache, Playwright, Cargo, Go, pip, Homebrew and more, plus the scratch folders of Claude Code sessions idle for 3 days.
 - Container disks (OrbStack, Docker Desktop) and the Nix store volume, as single numbers.
 
 Inside each folder, files land in buckets: dependencies (`node_modules`, venvs), build output (`target`, `dist`, `.mypy_cache`, ...), caches, git data, and the rest.
