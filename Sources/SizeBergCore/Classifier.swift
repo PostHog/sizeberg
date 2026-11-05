@@ -11,7 +11,10 @@ enum Classifier {
         "dist", "staticfiles", ".build", "DerivedData", ".gradle",
     ]
 
-    static let cacheNames: Set<String> = [".cache", ".flox"]
+    static let cacheNames: Set<String> = [".cache"]
+
+    /// Only these parts of .flox are rebuilt on activation; the rest, like env/manifest.toml, is checked in.
+    static let floxCacheNames: Set<String> = ["cache", "log"]
 
     static func kind(
         forDirectory name: String,
@@ -41,6 +44,9 @@ enum Classifier {
             return .buildOutput
         }
         if cacheNames.contains(name) {
+            return .caches
+        }
+        if floxCacheNames.contains(name), path.hasSuffix("/.flox/" + name) {
             return .caches
         }
         return .source

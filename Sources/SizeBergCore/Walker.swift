@@ -20,6 +20,8 @@ struct WalkUnit {
     var segment: Int
     var kind: BucketKind
     var filesOnly: Bool
+    /// A segment folder whose kind differs from the group's, such as a node_modules at the group root.
+    var startsTrimFolder = false
 }
 
 /// Work queue that walker threads also push into, to split big directories while others idle.
@@ -150,6 +152,16 @@ struct SharedEntry {
 }
 
 /// What a walk learns about one group. Cached between scans, so only changed groups are walked again.
+struct TrimFolder: Codable, Sendable {
+    var path: String
+    var kind: BucketKind
+
+    /// True when a folder of `kind` below a folder of `parent` starts rebuildable data.
+    static func starts(_ kind: BucketKind, below parent: BucketKind) -> Bool {
+        kind != parent && kind.isTrimmable
+    }
+}
+
 struct GroupScan {
     static let kindCount = BucketKind.allCases.count
 
@@ -161,6 +173,8 @@ struct GroupScan {
     var fileCounts = [Int](repeating: 0, count: kindCount)
     var errorCount = 0
     var entries: [SharedEntry] = []
+    /// Folders where rebuildable data starts, for trimming an item that stays.
+    var trimFolders: [TrimFolder] = []
 
     var fileCount: Int {
         fileCounts.reduce(0, +)
@@ -177,6 +191,7 @@ struct GroupScan {
         }
         errorCount += other.errorCount
         entries += other.entries
+        trimFolders += other.trimFolders
     }
 }
 
@@ -234,7 +249,11 @@ final class Walker: @unchecked Sendable {
     func run(_ segments: [Segment], indices: [Int]) -> [Int: GroupScan] {
         let units = indices.map { index in
             let segment = segments[index]
-            return WalkUnit(path: segment.path, group: segment.group, segment: index, kind: segment.kind, filesOnly: segment.filesOnly)
+            let startsTrimFolder = !segment.filesOnly && TrimFolder.starts(segment.kind, below: groups[segment.group].defaultKind)
+            return WalkUnit(
+                path: segment.path, group: segment.group, segment: index, kind: segment.kind,
+                filesOnly: segment.filesOnly, startsTrimFolder: startsTrimFolder
+            )
         }
         guard !units.isEmpty else { return [:] }
         segmentsOfGroup.withLock { value in
@@ -363,6 +382,9 @@ final class WalkWorker {
         var info = stat()
         fstat(fd, &info)
         scan.device = info.st_dev
+        if unit.startsTrimFolder {
+            scan.trimFolders.append(TrimFolder(path: unit.path, kind: unit.kind))
+        }
         walkDirectory(fd: fd, path: unit.path, kind: unit.kind, unit: unit, filesOnly: unit.filesOnly, into: &scan)
     }
 
@@ -409,6 +431,9 @@ final class WalkWorker {
             let childKind = settings.classify
                 ? Classifier.kind(forDirectory: name, parent: kind, path: childPath)
                 : settings.defaultKind
+            if TrimFolder.starts(childKind, below: kind) {
+                scan.trimFolders.append(TrimFolder(path: childPath, kind: childKind))
+            }
             let child = WalkUnit(path: childPath, group: unit.group, segment: unit.segment, kind: childKind, filesOnly: false)
             if childKind == .dependencies, kind != .dependencies {
                 queue.deferDependencies(child)

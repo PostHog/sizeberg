@@ -6,6 +6,13 @@ func bytes(_ value: Int64) -> String {
     ByteFormat.string(value)
 }
 
+/// Whole gigabytes from 10 GB up, for places with room for a glance only, like the sidebar.
+func roundedBytes(_ value: Int64) -> String {
+    let gigabytes = Double(value) / 1_000_000_000
+    guard gigabytes >= 10 else { return bytes(value) }
+    return "\(Int(gigabytes.rounded()).formatted()) GB"
+}
+
 extension BucketKind {
     var shortTitle: String {
         switch self {
@@ -28,6 +35,21 @@ extension BucketKind {
     }
 }
 
+extension BucketReport {
+    /// Folders by name, most common first: a Python tree has one __pycache__ per package.
+    var foldersByName: [(name: String, paths: [String])] {
+        Dictionary(grouping: folders ?? []) { ($0 as NSString).lastPathComponent }
+            .map { (name: $0.key, paths: $0.value) }
+            .sorted { ($0.paths.count, $1.name) > ($1.paths.count, $0.name) }
+    }
+
+    var folderSummary: String {
+        let names = foldersByName.map(\.name)
+        let shown = names.prefix(3).joined(separator: ", ")
+        return names.count > 3 ? "\(shown) and \(names.count - 3) more" : shown
+    }
+}
+
 extension GroupReport {
     var statusText: String {
         switch kind {
@@ -35,6 +57,7 @@ extension GroupReport {
         case .project: return "Folder"
         case .cache: return "Cache"
         case .system: return "Containers"
+        case .buildOutput: return "Rebuildable"
         case .worktree:
             switch git?.status ?? .active {
             case .active: return "Worktree"
@@ -59,6 +82,7 @@ extension GroupReport {
         case .cache: return .adaptive(light: Color(red: 0.52, green: 0.40, blue: 0.0), dark: Color(red: 0.93, green: 0.78, blue: 0.32))
         case .system: return .purple
         case .project: return .gray
+        case .buildOutput: return .adaptive(light: Color(red: 0.70, green: 0.36, blue: 0.0), dark: Color(red: 0.98, green: 0.62, blue: 0.30))
         }
     }
 
@@ -71,6 +95,7 @@ extension GroupReport {
         case .project: return "folder"
         case .cache: return "archivebox"
         case .system: return "shippingbox"
+        case .buildOutput: return "hammer"
         }
     }
 

@@ -9,7 +9,7 @@ struct ContentView: View {
         @Bindable var model = model
         NavigationSplitView {
             SidebarView(report: model.report)
-                .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 300)
+                .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 320)
         } detail: {
             detail
                 .navigationTitle(model.filter.rawValue)
@@ -44,8 +44,9 @@ struct ContentView: View {
             return model.progress?.phase.rawValue ?? "Starting"
         }
         guard let report = model.report else { return "" }
+        let scanned = "scanned \(report.scannedAt.formatted(.relative(presentation: .named)))"
         let count = model.visibleGroups(in: report).count
-        return "\(count) \(count == 1 ? "item" : "items") · scanned \(report.scannedAt.formatted(.relative(presentation: .named)))"
+        return "\(count) \(count == 1 ? "item" : "items") · \(scanned)"
     }
 
     @ToolbarContentBuilder
@@ -110,6 +111,21 @@ extension ContentView {
         if let name = ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT_REPO"],
            let main = report.groups.first(where: { $0.kind == .mainCheckout && $0.name == name }) {
             model.focusedID = main.id
+        }
+        if let name = ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT_FILTER"], let filter = ScanModel.Filter(rawValue: name) {
+            model.filter = filter
+        }
+        switch ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT_PLAN"] {
+        case "empty":
+            model.clearSelection()
+        case "both":
+            model.selectBuildOutput()
+        case "build":
+            model.clearSelection()
+            model.selectBuildOutput()
+            model.focusedID = Report.buildOutputID
+        default:
+            break
         }
         // Opens the confirmation only; nothing runs without pressing Delete.
         if ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT_CLEANUP"] != nil {

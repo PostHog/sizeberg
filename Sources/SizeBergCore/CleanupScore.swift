@@ -34,6 +34,8 @@ extension GroupReport {
             return nil
         case .cache:
             return score(confidence: Self.cacheConfidence, reason: "refills when used", hasLocalWork: false)
+        case .buildOutput:
+            return score(confidence: Self.cacheConfidence, reason: "next build puts it back", hasLocalWork: false)
         case .worktree, .project:
             break
         }

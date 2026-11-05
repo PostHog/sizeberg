@@ -108,7 +108,7 @@ final class ScanModel {
         guard !isBusy else { return }
         try? Report.clearCaches()
         report = nil
-        selection.removeAll()
+        clearSelection()
         focusedID = nil
     }
 
@@ -117,18 +117,18 @@ final class ScanModel {
         isScanning = false
         isFullScan = false
         progress = nil
-        selection.removeAll()
+        clearSelection()
         focusedID = nil
     }
 
     /// Groups the sidebar filter and the size toggle let through, before the search text.
     func groups(in report: Report, filter: Filter) -> [GroupReport] {
-        report.groups.filter { group in
+        report.items.filter { group in
             switch filter {
             case .all: break
             case .worktrees: guard group.kind == .worktree || group.kind == .mainCheckout else { return false }
             case .folders: guard group.kind == .project else { return false }
-            case .caches: guard group.kind == .cache || group.kind == .system else { return false }
+            case .caches: guard [.cache, .system, .buildOutput].contains(group.kind) else { return false }
             case .stale: guard group.git.map({ $0.status != .active }) ?? false else { return false }
             case .plan: return selection.contains(group.id)
             }
@@ -139,15 +139,16 @@ final class ScanModel {
         }
     }
 
-    func visibleGroups(in report: Report) -> [GroupReport] {
+    func matchesSearch(_ group: GroupReport) -> Bool {
         let query = searchText.trimmingCharacters(in: .whitespaces).lowercased()
-        let groups = groups(in: report, filter: filter)
-        guard !query.isEmpty else { return groups }
-        return groups.filter { group in
-            group.name.lowercased().contains(query)
-                || group.path.lowercased().contains(query)
-                || (group.git?.branch?.lowercased().contains(query) ?? false)
-        }
+        guard !query.isEmpty else { return true }
+        return group.name.lowercased().contains(query)
+            || group.path.lowercased().contains(query)
+            || (group.git?.branch?.lowercased().contains(query) ?? false)
+    }
+
+    func visibleGroups(in report: Report) -> [GroupReport] {
+        groups(in: report, filter: filter).filter(matchesSearch)
     }
 
     func isSelected(_ id: Int) -> Bool {
@@ -174,6 +175,12 @@ final class ScanModel {
         } else {
             selection.insert(id)
         }
+    }
+
+    /// Selects the stale worktrees of one repository. Its active worktrees and the checkout stay.
+    func selectStale(of main: GroupReport) {
+        guard let report else { return }
+        selection.formUnion(report.worktrees(of: main).filter(\.goesWithStale).map(\.id))
     }
 
     func selectStale() {
@@ -203,13 +210,20 @@ final class ScanModel {
 
     /// Opens the confirmation sheet for the selection.
     func prepareCleanup() {
-        guard let report, !selection.isEmpty, !isScanning, cleanup == nil else { return }
+        guard let report, !selection.isEmpty, !isBusy, cleanup == nil else { return }
         let plan = CleanupRunner.plan(for: report, selection: selection)
         cleanup = CleanupSession(
             items: plan.steps.map { CleanupSession.Item(step: $0) },
             manual: plan.manual.map { CleanupSession.Manual(id: $0.id, name: $0.name, reason: CleanupRunner.reasonNotIncluded($0)) },
-            expectedBytes: report.freeableBytes(selection: Set(plan.steps.flatMap(\.groupIDs)))
+            expectedBytes: Self.expectedBytes(of: plan.steps, in: report),
+            deleteBytes: Self.expectedBytes(of: plan.steps.filter { !$0.isTrim }, in: report),
+            trimBytes: Self.expectedBytes(of: plan.steps.filter(\.isTrim), in: report),
+            keptWithLocalWork: report.groups.filter { $0.git?.status == .staleWithLocalWork && !selection.contains($0.id) }.count
         )
+    }
+
+    func selectBuildOutput() {
+        selection.insert(Report.buildOutputID)
     }
 
     /// Runs the steps one after another, off the main thread, and measures free space around them.
@@ -224,15 +238,22 @@ final class ScanModel {
                 let step = session.items[index].step
                 let outcome = await Task.detached(priority: .userInitiated) { CleanupRunner.run(step) }.value
                 cleanup?.items[index].status = .finished(outcome)
-                if outcome == .done {
-                    selection.subtract(step.groupIDs)
+                if outcome.ran {
+                    selection.subtract(step.isTrim ? [Report.buildOutputID] : step.groupIDs)
                 }
             }
-            let done = (cleanup?.items ?? []).filter { $0.status == .finished(.done) }.flatMap(\.step.groupIDs)
-            cleanup?.doneExpectedBytes = report?.freeableBytes(selection: Set(done)) ?? 0
+            let ran = (cleanup?.items ?? []).filter(\.ran).map(\.step)
+            cleanup?.doneExpectedBytes = report.map { Self.expectedBytes(of: ran, in: $0) } ?? 0
             cleanup?.freeAfter = CleanupRunner.freeBytes()
             cleanup?.phase = .finished
         }
+    }
+
+    /// Deleted items free more together than alone; trims add what each frees alone.
+    private static func expectedBytes(of steps: [CleanupStep], in report: Report) -> Int64 {
+        let items = Set(steps.filter { !$0.isTrim }.flatMap(\.groupIDs))
+        let trimmed = steps.filter(\.isTrim).reduce(0) { $0 + $1.expectedBytes }
+        return report.freeableBytes(selection: items) + trimmed
     }
 
     /// Closes the sheet. After a run, scans again so the list shows what is left.
@@ -272,7 +293,14 @@ struct CleanupSession {
         var step: CleanupStep
         var status: Status = .waiting
 
-        var id: Int { step.id }
+        var id: String { step.id }
+
+        var ran: Bool {
+            if case .finished(let outcome) = status {
+                return outcome.ran
+            }
+            return false
+        }
     }
 
     struct Manual: Identifiable {
@@ -284,6 +312,11 @@ struct CleanupSession {
     var items: [Item]
     var manual: [Manual]
     var expectedBytes: Int64
+    /// What the items deleted whole free, and what the build output of the items that stay frees.
+    var deleteBytes: Int64
+    var trimBytes: Int64
+    /// Stale worktrees with local work that the plan leaves alone, so the sheet can say so.
+    var keptWithLocalWork: Int
     /// What the scan expected for the steps that ran to the end.
     var doneExpectedBytes: Int64 = 0
     var phase = Phase.confirm
@@ -292,5 +325,6 @@ struct CleanupSession {
 
     var freedBytes: Int64 { max(0, freeAfter - freeBefore) }
 
-    var itemCount: Int { items.reduce(0) { $0 + $1.step.groupIDs.count } }
+    var deleteItems: [Item] { items.filter { !$0.step.isTrim } }
+    var trimItems: [Item] { items.filter(\.step.isTrim) }
 }

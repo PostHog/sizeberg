@@ -31,10 +31,27 @@ struct SidebarView: View {
         }
     }
 
+    /// The filter with what deleting its deletable items frees together, and how many items it shows.
     private func row(_ filter: ScanModel.Filter) -> some View {
-        Label(filter.rawValue, systemImage: filter.symbol)
-            .badge(report.map { model.groups(in: $0, filter: filter).count } ?? 0)
-            .tag(filter)
+        let groups = report.map { model.groups(in: $0, filter: filter) } ?? []
+        let frees = report?.freeableBytes(selection: Set(groups.filter(\.selectable).map(\.id))) ?? 0
+        return Label {
+            HStack(spacing: 6) {
+                Text(filter.rawValue)
+                Spacer(minLength: 4)
+                if frees > 0 {
+                    Text(roundedBytes(frees))
+                        .font(.callout)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } icon: {
+            Image(systemName: filter.symbol)
+        }
+        .badge(groups.count)
+        .help(frees > 0 ? "Deleting every item here that can go frees \(bytes(frees))" : "")
+        .tag(filter)
     }
 }
 

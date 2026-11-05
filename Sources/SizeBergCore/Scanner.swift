@@ -532,6 +532,7 @@ private struct ReportBuilder {
                 continue
             }
             var buckets: [BucketReport] = []
+            let folders = Dictionary(grouping: scans[index]?.trimFolders ?? [], by: \.kind).mapValues { $0.map(\.path) }
             for kind in BucketKind.allCases {
                 let bucket = index * kindsPerGroup + kind.rawValue
                 guard totals.apparentBytes[bucket] > 0 || totals.fileCounts[bucket] > 0 else { continue }
@@ -540,7 +541,8 @@ private struct ReportBuilder {
                     apparentBytes: totals.apparentBytes[bucket],
                     privateBytes: totals.privateBytes[bucket],
                     freeableAloneBytes: totals.freeableAloneBytes[bucket],
-                    fileCount: totals.fileCounts[bucket]
+                    fileCount: totals.fileCounts[bucket],
+                    folders: kind.isTrimmable ? folders[kind]?.sorted() : nil
                 ))
             }
             let privateBytes = buckets.reduce(0) { $0 + $1.privateBytes }

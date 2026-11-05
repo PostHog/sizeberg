@@ -13,6 +13,8 @@ struct ItemRow: Identifiable {
     /// Cleanup value, or the sum of the worktrees' values for a main checkout.
     let cleanupKey: Int64
     let staleCount: Int
+    /// What trimming frees: build output and caches of the item, or of the checkout and its listed worktrees.
+    let trimBytes: Int64
 
     var id: Int { group.id }
     var name: String { group.name }
@@ -26,6 +28,7 @@ struct ItemRow: Identifiable {
         duBytes = group.apparentBytes
         cleanupKey = group.cleanupSortKey
         staleCount = 0
+        trimBytes = group.trimBytes
     }
 
     init(repository: GroupReport, worktrees: [GroupReport], report: Report) {
@@ -35,7 +38,8 @@ struct ItemRow: Identifiable {
         freesBytes = report.freeableBytes(selection: Set(worktrees.map(\.id)))
         duBytes = worktrees.reduce(0) { $0 + $1.apparentBytes }
         cleanupKey = worktrees.reduce(0) { $0 + max(0, $1.cleanupSortKey) }
-        staleCount = worktrees.filter(\.isStale).count
+        staleCount = worktrees.filter(\.goesWithStale).count
+        trimBytes = worktrees.reduce(repository.trimBytes) { $0 + $1.trimBytes }
     }
 
     /// Rows for the visible groups, with worktrees under their main checkout when `nested` is on.
@@ -60,7 +64,7 @@ struct ItemRow: Identifiable {
     }
 }
 
-/// Every item with what deleting it frees, ranked by cleanup value. Worktrees sit under their main checkout.
+/// Every item with what deleting it frees, and what Trim All frees in it. Worktrees sit under their main checkout.
 struct GroupTable: View {
     let report: Report
     @Environment(ScanModel.self) private var model
@@ -70,19 +74,15 @@ struct GroupTable: View {
         @Bindable var model = model
         let rows = sorted(ItemRow.rows(visible: model.visibleGroups(in: report), report: report, nested: model.groupWorktrees))
         Table(of: ItemRow.self, selection: $model.focusedID, sortOrder: $sortOrder) {
-            // The checkbox sits in the name column, so it indents with the name under a repository.
             TableColumn("Name", value: \.name) { row in
-                HStack(spacing: 8) {
-                    selectionToggle(row)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(row.group.name)
-                            .fontWeight(row.isRepository ? .semibold : .regular)
-                            .lineLimit(1)
-                        Text(subtitle(row))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(row.group.name)
+                        .fontWeight(row.isRepository ? .semibold : .regular)
+                        .lineLimit(1)
+                    Text(subtitle(row))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
             .width(min: 190, ideal: 230)
@@ -94,21 +94,39 @@ struct GroupTable: View {
                 cleanupCell(row)
             }
             .width(min: 110, ideal: 140)
-            TableColumn("Frees alone", value: \.freesBytes) { row in
+            TableColumn("Frees if deleted", value: \.freesBytes) { row in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    deleteToggle(row)
+                    Spacer(minLength: 0)
+                    VStack(alignment: .trailing, spacing: 1) {
+                        // Container disks are listed for context; the scan does not split them into removable parts.
+                        Text(row.group.kind == .system ? "n/a" : bytes(row.freesBytes))
+                            .monospacedDigit()
+                            .fontWeight(.medium)
+                        if row.isRepository {
+                            Text("together")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .width(min: 170, ideal: 190)
+            TableColumn("Build output", value: \.trimBytes) { row in
                 VStack(alignment: .trailing, spacing: 1) {
-                    // Container disks are listed for context; the scan does not split them into removable parts.
-                    Text(row.group.kind == .system ? "n/a" : bytes(row.freesBytes))
+                    Text(row.trimBytes > 0 ? bytes(row.trimBytes) : "–")
                         .monospacedDigit()
-                        .fontWeight(.medium)
-                    if row.isRepository {
-                        Text("worktrees together")
+                        .foregroundStyle(row.trimBytes > 0 ? .secondary : .tertiary)
+                    if row.isRepository, row.trimBytes > 0 {
+                        Text("with worktrees")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
+                .help("Build output and caches in this item. Select “Build output and caches” to delete them in every item.")
             }
-            .width(min: 90, ideal: 110)
+            .width(min: 80, ideal: 100)
             TableColumn("du says", value: \.duBytes) { row in
                 Text(bytes(row.duBytes))
                     .monospacedDigit()
@@ -157,23 +175,34 @@ struct GroupTable: View {
     }
 
     @ViewBuilder
-    private func selectionToggle(_ row: ItemRow) -> some View {
-        if let children = row.children {
-            // Selects or clears every worktree of the repository; shows a dash when some are selected.
-            let bindings = children.filter(\.group.selectable).map { model.binding(for: $0.id) }
-            Toggle(sources: bindings, isOn: \.self) { EmptyView() }
-                .labelsHidden()
-                .toggleStyle(.checkbox)
-                .help("Select every worktree of \(row.name)")
+    private func deleteToggle(_ row: ItemRow) -> some View {
+        if row.isRepository {
+            // A checkbox here would read as deleting the repository. Only its stale worktrees can be picked at once.
+            let stale = report.worktrees(of: row.group).filter(\.goesWithStale)
+            if !stale.isEmpty {
+                // Table rows draw plain buttons as bare text; the border makes it read as a button.
+                Button("Select Stale") { model.selectStale(of: row.group) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(stale.allSatisfy { model.selection.contains($0.id) })
+                    .help("Select the \(stale.count) stale \(stale.count == 1 ? "worktree" : "worktrees") of \(row.name). The checkout and active worktrees stay.")
+            }
         } else {
             Toggle("", isOn: model.binding(for: row.id))
                 .labelsHidden()
                 .toggleStyle(.checkbox)
                 .disabled(!row.group.selectable)
+                // A main checkout or a container disk is never deleted from here; an empty box would suggest it is.
+                .opacity(row.group.selectable ? 1 : 0)
+                .help("Delete \(row.name)")
         }
     }
 
     private func subtitle(_ row: ItemRow) -> String {
+        if row.group.kind == .buildOutput {
+            let count = report.trimmableIDs.count
+            return "In \(count) \(count == 1 ? "item" : "checkouts, worktrees and folders") · items stay"
+        }
         guard let children = row.children else { return row.group.subtitle }
         let count = children.count
         return "\(count) \(count == 1 ? "worktree" : "worktrees")" + (row.staleCount > 0 ? " · \(row.staleCount) stale" : "")

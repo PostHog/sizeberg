@@ -40,9 +40,28 @@ struct GroupDetail: View {
                     worktreeSummary(worktrees)
                 }
             }
-            if group.kind != .system, group.apparentBytes > 0 {
+            if group.kind == .buildOutput {
+                Section("Where it is") {
+                    buildOutputHolders
+                }
+            }
+            if group.kind != .system, group.kind != .buildOutput, group.apparentBytes > 0 {
                 Section(group.kind == .mainCheckout ? "What deleting the checkout would free" : "What deleting frees") {
                     SizeBreakdown(report: report, group: group)
+                }
+            }
+            let trimBuckets = group.trimmableBuckets
+            if !trimBuckets.isEmpty {
+                Section {
+                    ForEach(trimBuckets, id: \.kind) { bucket in
+                        trimRow(bucket)
+                    }
+                } header: {
+                    Text("Build output and caches in this item")
+                } footer: {
+                    Text("Select “Build output and caches” in the list to delete these in every item at once. The next build or tool run puts them back.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             if let git = group.git {
@@ -80,22 +99,28 @@ struct GroupDetail: View {
                 StatusBadge(group: group)
                 Spacer(minLength: 0)
             }
-            HStack(spacing: 8) {
-                Text(displayPath(group.path))
-                    .font(.callout.monospaced())
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 0)
-                Button("Show in Finder", systemImage: "folder") { model.reveal(group.path) }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .help("Show in Finder")
+            if !group.paths.isEmpty {
+                pathRow
             }
             if group.selectable {
                 Toggle("In cleanup plan", isOn: model.binding(for: group.id))
             }
+        }
+    }
+
+    private var pathRow: some View {
+        HStack(spacing: 8) {
+            Text(displayPath(group.path))
+                .font(.callout.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+            Button("Show in Finder", systemImage: "folder") { model.reveal(group.path) }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .help("Show in Finder")
         }
     }
 
@@ -104,7 +129,7 @@ struct GroupDetail: View {
     @ViewBuilder
     private func worktreeSummary(_ worktrees: [GroupReport]) -> some View {
         let ids = Set(worktrees.map(\.id))
-        let stale = worktrees.filter(\.isStale)
+        let stale = worktrees.filter(\.goesWithStale)
         LabeledContent("Worktrees", value: "\(worktrees.count), \(stale.count) stale")
         LabeledContent("All together free") {
             Text(bytes(report.freeableBytes(selection: ids))).monospacedDigit().fontWeight(.medium)
@@ -117,13 +142,89 @@ struct GroupDetail: View {
                 Text(bytes(report.freeableBytes(selection: Set(stale.map(\.id))))).monospacedDigit()
             }
         }
-        HStack {
-            Spacer()
-            if !stale.isEmpty {
-                Button("Select stale") { model.selection.formUnion(stale.map(\.id)) }
+        // No "select all": deleting every worktree, active ones too, is rarely what anyone wants.
+        if !stale.isEmpty {
+            HStack {
+                Spacer()
+                Button("Select Stale") { model.selectStale(of: group) }
             }
-            Button("Select all") { model.selection.formUnion(ids) }
         }
+    }
+
+    /// The items that hold the most build output, for the build output item.
+    @ViewBuilder
+    private var buildOutputHolders: some View {
+        let holders = report.groups.filter { $0.trimBytes > 0 }.sorted { $0.trimBytes > $1.trimBytes }
+        ForEach(holders.prefix(Self.listedHolders), id: \.id) { holder in
+            LabeledContent {
+                Text(bytes(holder.trimBytes)).monospacedDigit()
+            } label: {
+                Text(holder.name)
+                Text(holder.trimmableBuckets.map(\.kind.title).joined(separator: ", "))
+            }
+        }
+        if holders.count > Self.listedHolders {
+            Text("and \(holders.count - Self.listedHolders) more, \(bytes(holders.dropFirst(Self.listedHolders).reduce(0) { $0 + $1.trimBytes })) together")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private static let listedHolders = 12
+
+    private func trimRow(_ bucket: BucketReport) -> some View {
+        let folders = bucket.folders ?? []
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(bucket.kind.color)
+                    .frame(width: 10, height: 10)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(bucket.kind.title)
+                    Text("\(folders.count.formatted()) \(folders.count == 1 ? "folder" : "folders")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                Text(bytes(bucket.freeableAloneBytes))
+                    .monospacedDigit()
+                    .fontWeight(.medium)
+            }
+            DisclosureGroup("Folders") {
+                // A name that repeats, like __pycache__, shows once with its count; a single folder shows its path.
+                let names = bucket.foldersByName
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(names.prefix(Self.listedNames), id: \.name) { entry in
+                        HStack {
+                            Text(entry.paths.count == 1 ? relativePath(entry.paths[0]) : entry.name)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .textSelection(.enabled)
+                            Spacer(minLength: 8)
+                            if entry.paths.count > 1 {
+                                Text("\(entry.paths.count.formatted()) folders")
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                    }
+                    if names.count > Self.listedNames {
+                        Text("and \(names.count - Self.listedNames) more names")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .font(.caption)
+        }
+    }
+
+    private static let listedNames = 20
+
+    private func relativePath(_ folder: String) -> String {
+        let root = group.path + "/"
+        return folder.hasPrefix(root) ? String(folder.dropFirst(root.count)) : displayPath(folder)
     }
 
     @ViewBuilder

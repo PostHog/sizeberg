@@ -39,7 +39,29 @@ extension Report {
     }
 
     public func group(_ id: Int) -> GroupReport? {
-        groups.indices.contains(id) && groups[id].id == id ? groups[id] : groups.first { $0.id == id }
+        if id == Report.buildOutputID {
+            return buildOutputItem
+        }
+        return groups.indices.contains(id) && groups[id].id == id ? groups[id] : groups.first { $0.id == id }
+    }
+
+    /// The scanned groups, plus the build output item when there is build output to delete.
+    public var items: [GroupReport] {
+        groups + [buildOutputItem].compactMap { $0 }
+    }
+
+    /// Build output and caches of every checkout, worktree and folder, as one item to delete.
+    /// The items stay; the next build or tool run puts these folders back.
+    public var buildOutputItem: GroupReport? {
+        let holders = groups.filter { $0.trimBytes > 0 }
+        guard !holders.isEmpty else { return nil }
+        let bytes = trimAllBytes
+        return GroupReport(
+            id: Report.buildOutputID, kind: .buildOutput, name: "Build output and caches", paths: [], git: nil, buckets: [],
+            apparentBytes: holders.flatMap(\.trimmableBuckets).reduce(0) { $0 + $1.apparentBytes },
+            privateBytes: bytes, freeableAloneBytes: bytes, selectable: true, cleanupCommand: nil,
+            note: "The next build or tool run puts these folders back. Dependencies stay, and so do folders that hold files git tracks."
+        )
     }
 
     public var walkedGroups: [GroupReport] {
@@ -67,16 +89,25 @@ extension Report {
     }
 
     /// What deleting every selected group frees.
+    /// The build output item adds only what lies in items the selection keeps: a deleted item frees its build output anyway.
     public func freeableBytes(selection: Set<Int>) -> Int64 {
         let alone = groups.filter { selection.contains($0.id) }.reduce(0) { $0 + $1.freeableAloneBytes }
         let together = sharedSets
             .filter { set in set.groupIDs.allSatisfy { selection.contains($0) } }
             .reduce(0) { $0 + $1.bytes }
-        return alone + together
+        return alone + together + buildOutputBytes(keeping: selection)
     }
 
     public func apparentBytes(selection: Set<Int>) -> Int64 {
-        groups.filter { selection.contains($0.id) }.reduce(0) { $0 + $1.apparentBytes }
+        let trimmed = selection.contains(Report.buildOutputID)
+            ? groups.filter { !selection.contains($0.id) }.flatMap(\.trimmableBuckets).reduce(0) { $0 + $1.apparentBytes }
+            : 0
+        return groups.filter { selection.contains($0.id) }.reduce(0) { $0 + $1.apparentBytes } + trimmed
+    }
+
+    private func buildOutputBytes(keeping selection: Set<Int>) -> Int64 {
+        guard selection.contains(Report.buildOutputID) else { return 0 }
+        return groups.filter { !selection.contains($0.id) }.reduce(0) { $0 + $1.trimBytes }
     }
 
     /// Worktrees of the repository whose main checkout is `main`, matched by repository path.
@@ -96,7 +127,7 @@ extension Report {
 
     /// Stale worktrees without local work, plus the package stores that hold their dependencies.
     public var staleSelection: Set<Int> {
-        let stale = groups.filter { $0.git?.status == .stale || $0.git?.status == .missing }.map(\.id)
+        let stale = groups.filter(\.goesWithStale).map(\.id)
         return Set(stale).union(packageStoreIDs)
     }
 
@@ -114,7 +145,7 @@ extension Report {
             switch group.kind {
             case .worktree, .mainCheckout: worktrees += 1
             case .project: folders += 1
-            case .cache, .system: names.append(group.name)
+            case .cache, .system, .buildOutput: names.append(group.name)
             }
         }
         if worktrees == 1, let only = set.groupIDs.compactMap({ group($0) }).first(where: { $0.kind == .worktree || $0.kind == .mainCheckout }) {
@@ -133,9 +164,9 @@ extension Report {
         return names.joined(separator: " + ")
     }
 
-    /// Shell commands for the selection: worktrees first, so a store prune afterwards can drop their packages.
+    /// Shell commands for the selection, in the order the app runs them.
     public func cleanupPlan(selection: Set<Int>) -> String {
-        let selected = groups.filter { selection.contains($0.id) }
+        let steps = CleanupRunner.plan(for: self, selection: selection).steps
         var lines = ["# SizeBerg cleanup plan: frees about \(ByteFormat.string(freeableBytes(selection: selection)))"]
         let sections: [(String, [GroupKind])] = [
             ("Worktrees (git refuses to remove one with uncommitted changes)", [.worktree]),
@@ -143,14 +174,28 @@ extension Report {
             ("Caches: run these after the worktrees are gone", [.cache]),
         ]
         for (title, kinds) in sections {
-            let commands = selected.filter { kinds.contains($0.kind) }.compactMap(\.cleanupCommand)
+            let commands = steps.filter { !$0.isTrim && kinds.contains($0.kind) }.map(\.command)
             guard !commands.isEmpty else { continue }
             lines.append("")
             lines.append("# \(title)")
-            var seen = Set<String>()
-            lines += commands.filter { seen.insert($0).inserted }
+            lines += commands
+        }
+        let trims = steps.filter(\.isTrim).map(\.command)
+        if !trims.isEmpty {
+            lines += ["", "# Build output and caches: leave out folders that hold files git tracks"] + trims
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// Items a trim cleans: checkouts, worktrees and folders that hold build output or caches.
+    public var trimmableIDs: Set<Int> {
+        Set(groups.filter { $0.trimBytes > 0 }.map(\.id))
+    }
+
+    /// What trimming every item frees. A lower bound: data shared only among trimmed folders
+    /// of several items frees too, and is not counted.
+    public var trimAllBytes: Int64 {
+        groups.reduce(0) { $0 + $1.trimBytes }
     }
 }
 
@@ -168,6 +213,21 @@ extension GitInfo {
 }
 
 extension GroupReport {
+    /// Build output and caches in an item that can stay: a checkout, a worktree or a folder.
+    public var trimmableBuckets: [BucketReport] {
+        guard [.mainCheckout, .worktree, .project].contains(kind), git?.status != .missing else { return [] }
+        return buckets.filter { $0.kind.isTrimmable && !($0.folders ?? []).isEmpty }
+    }
+
+    public var trimBytes: Int64 {
+        trimmableBuckets.reduce(0) { $0 + $1.freeableAloneBytes }
+    }
+
+    /// What "Select Stale" picks: stale worktrees without local work, and worktrees whose folder is gone.
+    public var goesWithStale: Bool {
+        git?.status == .stale || git?.status == .missing
+    }
+
     /// Quiet worktree without local work: safe to propose for deletion.
     public var isStale: Bool {
         git?.status == .stale

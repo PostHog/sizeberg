@@ -1,60 +1,74 @@
 import SizeBergCore
 import SwiftUI
 
-/// The cleanup plan, floating on glass over the list: what the selection frees and the actions on it.
+/// The cleanup plan, docked under the list: what the plan frees and the actions on it.
+/// It sits on the bar material rather than floating glass, so its text stays readable over a busy table.
 struct PlanBar: View {
     let report: Report
     @Environment(ScanModel.self) private var model
 
     var body: some View {
-        GlassEffectContainer(spacing: 10) {
-            HStack(spacing: 10) {
-                summary
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .glassEffect(.regular, in: .capsule)
-                if model.selection.isEmpty {
-                    Button("Select stale worktrees and stores") { model.selectStale() }
-                        .buttonStyle(.glassProminent)
-                } else {
-                    Button("Clear") { model.clearSelection() }
-                        .buttonStyle(.glass)
-                    Button(model.copiedPlan ? "Copied" : "Copy commands") { model.copyPlan() }
-                        .buttonStyle(.glass)
-                        .help("Copy the cleanup commands to run them yourself")
-                    Button("Clean Up…", role: .destructive) { model.prepareCleanup() }
-                        .buttonStyle(.glassProminent)
-                        .tint(.red)
-                        .disabled(model.isBusy)
-                        .help("Review the cleanup, then run it")
-                }
-            }
-            .controlSize(.large)
+        HStack(spacing: 16) {
+            summary
+            Spacer(minLength: 12)
+            actions
         }
-        .padding(.bottom, 14)
+        .controlSize(.large)
         .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .background(.bar)
+        .overlay(alignment: .top) {
+            Divider()
+        }
+    }
+
+    @ViewBuilder
+    private var actions: some View {
+        if model.selection.isEmpty {
+            Button("Select Build Output") { model.selectBuildOutput() }
+                .disabled(report.trimAllBytes == 0)
+                .help("Select build output and caches in every checkout, worktree and folder. The items stay.")
+            Button("Select Stale") { model.selectStale() }
+                .buttonStyle(.borderedProminent)
+                .help("Select stale worktrees and the package stores")
+        } else {
+            Button("Clear") { model.clearSelection() }
+            Button(model.copiedPlan ? "Copied" : "Copy Commands") { model.copyPlan() }
+                .help("Copy the cleanup commands to run them yourself")
+            Button("Clean Up…", role: .destructive) { model.prepareCleanup() }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .disabled(model.isBusy)
+                .help("Review the cleanup, then run it")
+        }
     }
 
     @ViewBuilder
     private var summary: some View {
         if model.selection.isEmpty {
-            let stale = report.groups.filter(\.isStale).count
-            HStack(spacing: 6) {
-                Text("\(stale) stale worktrees")
-                    .fontWeight(.medium)
-                Text("with their stores free \(bytes(report.freeableBytes(selection: report.staleSelection)))")
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 28) {
+                figure(bytes(report.freeableBytes(selection: report.staleSelection)), "stale worktrees and stores free")
+                figure(bytes(report.trimAllBytes), "build output and caches free, the next build puts them back")
             }
         } else {
-            HStack(spacing: 6) {
-                Text("\(model.selection.count) selected")
-                    .foregroundStyle(.secondary)
-                Text("frees \(bytes(report.freeableBytes(selection: model.selection)))")
-                    .fontWeight(.semibold)
-                Text("du would claim \(bytes(report.apparentBytes(selection: model.selection)))")
-                    .foregroundStyle(.secondary)
-            }
-            .monospacedDigit()
+            let count = model.selection.count
+            figure(
+                "frees \(bytes(report.freeableBytes(selection: model.selection)))",
+                "\(count) selected · du would claim \(bytes(report.apparentBytes(selection: model.selection)))"
+            )
+        }
+    }
+
+    private func figure(_ value: String, _ caption: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(value)
+                .font(.title3.weight(.semibold))
+                .monospacedDigit()
+            Text(caption)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
         }
     }
 }

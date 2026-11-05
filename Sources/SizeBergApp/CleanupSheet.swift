@@ -11,9 +11,20 @@ struct CleanupSheet: View {
             VStack(alignment: .leading, spacing: 16) {
                 header(session)
                 List {
-                    Section {
-                        ForEach(session.items) { item in
-                            StepRow(item: item)
+                    if !session.deleteItems.isEmpty {
+                        Section {
+                            ForEach(session.deleteItems) { item in
+                                StepRow(item: item)
+                            }
+                        }
+                    }
+                    if !session.trimItems.isEmpty {
+                        Section {
+                            ForEach(session.trimItems) { item in
+                                StepRow(item: item)
+                            }
+                        } header: {
+                            Text("Build output and caches only, in \(session.trimItems.count) items that stay")
                         }
                     }
                     if !session.manual.isEmpty {
@@ -41,13 +52,36 @@ struct CleanupSheet: View {
         switch session.phase {
         case .confirm:
             VStack(alignment: .leading, spacing: 6) {
-                Text("Delete \(session.itemCount) \(session.itemCount == 1 ? "item" : "items")?")
+                Text(title(session))
                     .font(.title2.weight(.semibold))
                 Text("This frees about \(bytes(session.expectedBytes)). Deleted files do not go to the Trash and cannot be restored.")
                     .foregroundStyle(.secondary)
-                Text("Each worktree and folder is checked again first. A worktree with uncommitted changes or commits no remote has is skipped, and so is a folder that changed since the scan.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                if !session.deleteItems.isEmpty, !session.trimItems.isEmpty {
+                    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 2) {
+                        GridRow {
+                            Image(systemName: "trash").foregroundStyle(.secondary)
+                            Text("Deleted whole: \(deleteCount(session)) \(deleteCount(session) == 1 ? "item" : "items")")
+                            Text(bytes(session.deleteBytes)).monospacedDigit().gridColumnAlignment(.trailing)
+                        }
+                        GridRow {
+                            Image(systemName: "hammer").foregroundStyle(.secondary)
+                            Text("Build output only: \(session.trimItems.count) items that stay")
+                            Text(bytes(session.trimBytes)).monospacedDigit()
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                if !session.deleteItems.isEmpty {
+                    Text("Each worktree and folder is checked again first. A worktree with uncommitted changes or commits no remote has is skipped, and so is a folder that changed since the scan."
+                         + (session.keptWithLocalWork > 0 ? " \(session.keptWithLocalWork) stale \(session.keptWithLocalWork == 1 ? "worktree" : "worktrees") with local work \(session.keptWithLocalWork == 1 ? "is" : "are") not in this plan." : ""))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                if !session.trimItems.isEmpty {
+                    Text("Build output and caches go from items that stay: your source, commits and dependencies are not touched, and the next build puts the folders back. Folders that hold files git tracks stay. Stop dev servers and builds first.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
         case .running:
             HStack(spacing: 10) {
@@ -65,6 +99,21 @@ struct CleanupSheet: View {
         }
     }
 
+    private func deleteCount(_ session: CleanupSession) -> Int {
+        session.deleteItems.reduce(0) { $0 + $1.step.groupIDs.count }
+    }
+
+    private func title(_ session: CleanupSession) -> String {
+        let count = deleteCount(session)
+        let items = "\(count) \(count == 1 ? "item" : "items")"
+        let trims = session.trimItems.count
+        switch (count, trims) {
+        case (_, 0): return "Delete \(items)?"
+        case (0, _): return "Delete build output in \(trims) items?"
+        default: return "Delete \(items), and build output in \(trims) others?"
+        }
+    }
+
     @ViewBuilder
     private func footer(_ session: CleanupSession) -> some View {
         HStack {
@@ -73,7 +122,7 @@ struct CleanupSheet: View {
             case .confirm:
                 Button("Cancel", role: .cancel) { model.closeCleanup() }
                     .keyboardShortcut(.cancelAction)
-                Button("Delete \(session.itemCount) \(session.itemCount == 1 ? "Item" : "Items")", role: .destructive) {
+                Button("Delete", role: .destructive) {
                     model.runCleanup()
                 }
                 .buttonStyle(.glassProminent)
@@ -99,8 +148,8 @@ private struct StepRow: View {
             statusIcon
                 .frame(width: 16)
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.step.groupIDs.count > 1 ? "\(item.step.name) and \(item.step.groupIDs.count - 1) more" : item.step.name)
-                Text(item.step.command)
+                Text(title)
+                Text(commandText)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -125,11 +174,14 @@ private struct StepRow: View {
     private var statusIcon: some View {
         switch item.status {
         case .waiting:
-            Image(systemName: "circle.dotted").foregroundStyle(.tertiary)
+            // Not a circle: an empty circle reads as an unticked box that could be ticked.
+            Image(systemName: item.step.isTrim ? "hammer" : "trash").foregroundStyle(.secondary)
         case .running:
             ProgressView().controlSize(.mini)
         case .finished(.done):
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        case .finished(.partlyDone):
+            Image(systemName: "checkmark.circle").foregroundStyle(GroupReport.localWorkColor)
         case .finished(.skipped):
             Image(systemName: "minus.circle.fill").foregroundStyle(GroupReport.localWorkColor)
         case .finished(.failed):
@@ -137,9 +189,24 @@ private struct StepRow: View {
         }
     }
 
+    /// A trim deletes thousands of __pycache__ folders at times, so it shows the count and names instead.
+    private var commandText: String {
+        let step = item.step
+        guard step.isTrim else { return step.command }
+        let count = step.folders.count
+        let names = Set(step.folders.map { ($0 as NSString).lastPathComponent }).sorted().joined(separator: ", ")
+        return "rm -rf on \(count.formatted()) \(count == 1 ? "folder" : "folders"): \(names)"
+    }
+
+    private var title: String {
+        let step = item.step
+        return step.groupIDs.count > 1 ? "\(step.name) and \(step.groupIDs.count - 1) more" : step.name
+    }
+
     private var message: String? {
         switch item.status {
         case .finished(.skipped(let reason)): return "Skipped: \(reason)"
+        case .finished(.partlyDone(let reason)): return reason
         case .finished(.failed(let output)): return output
         default: return nil
         }

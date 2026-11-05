@@ -16,6 +16,12 @@ public enum BucketKind: Int, Codable, CaseIterable, Sendable {
         case .git: return "Git data"
         }
     }
+
+    /// What a trim deletes from an item that stays: the next build or tool run puts it back.
+    /// Dependencies need an install, and APFS clones make them free little, so a trim leaves them.
+    public var isTrimmable: Bool {
+        self == .buildOutput || self == .caches
+    }
 }
 
 public enum GroupKind: String, Codable, Sendable {
@@ -24,6 +30,9 @@ public enum GroupKind: String, Codable, Sendable {
     case project
     case cache
     case system
+    /// One list item for the build output and caches inside every checkout, worktree and folder.
+    /// The report does not store it; `Report.buildOutputItem` derives it from the other groups.
+    case buildOutput
 }
 
 public enum WorktreeStatus: String, Codable, Sendable {
@@ -56,6 +65,9 @@ public struct BucketReport: Codable, Sendable {
     /// Private bytes plus shared data whose every copy is inside this bucket.
     public var freeableAloneBytes: Int64
     public var fileCount: Int
+    /// The folders where this kind of data starts, such as each __pycache__. Deleting all of them
+    /// frees `freeableAloneBytes`. Nil when a trim leaves this kind, and in reports from older versions.
+    public var folders: [String]? = nil
 }
 
 public struct GroupReport: Codable, Identifiable, Sendable {
@@ -92,6 +104,7 @@ public struct VolumeInfo: Codable, Sendable {
 
 public struct Report: Codable, Sendable {
     public static let outsideGroupID = -1
+    public static let buildOutputID = -2
 
     public var scannedAt: Date
     public var durationSeconds: Double
