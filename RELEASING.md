@@ -23,7 +23,7 @@ Done once. Kept here so a rotated key can be set up the same way.
 
 1. **Pick the version.** Count the minor up for a release (`0.2.0`), the patch for a quick fix on top (`0.2.1`). A version with a `-` becomes a pre-release.
 2. **Bump it** in `VERSION`.
-3. **Changelog.** Add a `## <version>` section to `CHANGELOG.md`. The release workflow takes it as the release notes.
+3. **Changelog.** Changes collect under `## <version> (unreleased)` at the top of `CHANGELOG.md` as they land. Rename it to `## <version>` for the release; the release workflow takes that section as the release notes.
 4. **Check locally:** `swift test` and `./build.sh`. Commit through a PR and merge to `main`.
 5. **Tag and push** from the merged `main`:
 
