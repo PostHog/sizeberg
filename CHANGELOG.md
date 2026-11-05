@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.4 (unreleased)
+## 0.1.4
 
 - Runs on macOS 15 Sequoia. Liquid Glass buttons and the toolbar spacer sit behind availability checks, so Sequoia shows the classic look. CI now launches each build on a macOS 15 runner and scans a test repository there.
 - Clean Up skips a worktree or folder that any running process works in, such as a dev server, an editor or a terminal tab, and names it. Before, only Claude Code and Codex agents kept a worktree.
