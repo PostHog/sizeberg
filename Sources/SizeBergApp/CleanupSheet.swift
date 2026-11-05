@@ -204,10 +204,11 @@ private struct StepRow: View {
         }
     }
 
-    /// Build output can be thousands of __pycache__ folders, so the row names what goes instead of listing it.
+    /// Build output can be thousands of __pycache__ folders, and scratchpads dozens of sessions, so the row
+    /// names what goes instead of listing it.
     private var commandText: String {
         let step = item.step
-        return step.isTrim ? folderSummary(step.folders, names: 4) : step.command
+        return step.folders.isEmpty ? step.command : folderSummary(step.folders, names: 4)
     }
 
     /// Like "Also deletes files git ignores: .env, notes.md and 3 more". Secret-looking ones first.

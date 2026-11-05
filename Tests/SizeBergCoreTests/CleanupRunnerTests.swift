@@ -41,9 +41,13 @@ struct CleanupRunnerTests {
         #expect(!FileManager.default.fileExists(atPath: worktree.path))
     }
 
-    @Test func worktreeWithNewWorkIsSkipped() throws {
+    /// status.showUntrackedFiles=no hides a new file from a plain git status, and git worktree remove then deletes it.
+    @Test(arguments: [false, true]) func worktreeWithNewWorkIsSkipped(hidesUntrackedFiles: Bool) throws {
         let (root, repo, worktree) = try Self.repoWithWorktree()
         defer { try? FileManager.default.removeItem(at: root) }
+        if hidesUntrackedFiles {
+            try Self.git(["config", "status.showUntrackedFiles", "no"], in: repo)
+        }
         try Data("not committed\n".utf8).write(to: worktree.appendingPathComponent("draft.txt"))
 
         #expect(CleanupRunner.run(Self.step(repo: repo, worktree: worktree)) == .skipped("Has uncommitted changes now."))
@@ -51,7 +55,8 @@ struct CleanupRunnerTests {
     }
 
     /// A trim deletes rebuildable folders from a checkout that stays. A committed dist folder must survive it.
-    @Test func trimKeepsFoldersThatHoldTrackedFiles() throws {
+    /// Also when the item is a plain folder that holds the repository, which git cannot be asked about.
+    @Test(arguments: [false, true]) func trimKeepsFoldersThatHoldTrackedFiles(fromPlainFolder: Bool) throws {
         let (root, repo, _) = try Self.repoWithWorktree()
         defer { try? FileManager.default.removeItem(at: root) }
         let dist = repo.appendingPathComponent("dist")
@@ -64,7 +69,7 @@ struct CleanupRunnerTests {
         try Self.git(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "ship dist"], in: repo)
         let folders = [dist.path, modules.path]
         let step = CleanupStep(
-            groupIDs: [0], name: "repo", kind: .mainCheckout, path: repo.path,
+            groupIDs: [0], name: "repo", kind: fromPlainFolder ? .project : .mainCheckout, path: fromPlainFolder ? root.path : repo.path,
             command: CleanupRunner.trimCommand(folders), expectedBytes: 0, isTrim: true, folders: folders
         )
 

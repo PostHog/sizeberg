@@ -61,7 +61,8 @@ public enum CleanupRunner {
                 stepByCommand[command] = steps.count
                 steps.append(CleanupStep(
                     groupIDs: [group.id], name: group.name, kind: group.kind, path: group.path,
-                    command: command, expectedBytes: group.freeableAloneBytes
+                    command: command, expectedBytes: group.freeableAloneBytes,
+                    folders: group.name == ClaudeScratchpads.itemName ? group.paths : []
                 ))
             }
         }
@@ -98,6 +99,8 @@ public enum CleanupRunner {
             return worktreeReasonToSkip(step)
         case .project:
             return folderReasonToSkip(step)
+        case .cache where step.name == ClaudeScratchpads.itemName:
+            return ClaudeScratchpads().reasonToSkip(step.folders)
         default:
             return nil
         }
@@ -149,12 +152,47 @@ public enum CleanupRunner {
     }
 
     /// Folders that still exist and hold no file git tracks. A committed dist folder or a
-    /// .flox/env stays, because deleting it would change the checkout itself.
+    /// .flox/env stays, because deleting it would change the checkout itself. Each folder is checked
+    /// against the repository it is in, which for a plain folder or a clone inside a checkout is not
+    /// the item's own; a folder git does not answer for stays.
     static func foldersSafeToTrim(_ step: CleanupStep) -> [String] {
         let existing = step.folders.filter { FileManager.default.fileExists(atPath: $0) }
-        guard step.kind == .worktree || step.kind == .mainCheckout, !existing.isEmpty else { return existing }
-        guard let tracked = trackedFolders(in: step.path, among: existing) else { return [] }
-        return existing.filter { !tracked.contains($0) }
+        var repositoryOf: [String: String?] = [:]
+        let byRepository = Dictionary(grouping: existing) { repository(holding: $0, within: step.path, known: &repositoryOf) }
+        var safe = Set<String>()
+        for (repository, folders) in byRepository {
+            guard let repository else {
+                safe.formUnion(folders)
+                continue
+            }
+            guard let tracked = trackedFolders(in: repository, among: folders) else { continue }
+            safe.formUnion(folders.filter { !tracked.contains($0) })
+        }
+        return existing.filter(safe.contains)
+    }
+
+    /// The nearest folder from `folder` up to `top` that has a `.git` folder or file.
+    private static func repository(holding folder: String, within top: String, known: inout [String: String?]) -> String? {
+        var current = folder
+        var visited: [String] = []
+        var found: String?
+        while true {
+            if let answer = known[current] {
+                found = answer
+                break
+            }
+            visited.append(current)
+            if FileManager.default.fileExists(atPath: current + "/.git") {
+                found = current
+                break
+            }
+            guard current != top, current.hasPrefix(top + "/") else { break }
+            current = (current as NSString).deletingLastPathComponent
+        }
+        for path in visited {
+            known[path] = found
+        }
+        return found
     }
 
     /// The folders among `folders` that hold a file git tracks. Nil when git does not answer.

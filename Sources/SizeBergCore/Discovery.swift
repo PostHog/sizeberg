@@ -201,10 +201,10 @@ struct Discovery {
         if sessions.activeCount > 0 {
             note += " The \(sessions.activeCount) newer sessions keep theirs."
         }
-        note += " A session that holds a git worktree keeps its folder; the worktree is an item of its own."
+        note += " A session that holds a git repository or worktree keeps its folder, since it may hold the only copy of commits."
         return [GroupSpec(
             kind: .cache,
-            name: "Claude Code scratchpads",
+            name: ClaudeScratchpads.itemName,
             paths: sessions.idle,
             classify: false,
             defaultKind: .caches,

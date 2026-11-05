@@ -122,8 +122,10 @@ final class GitInspector: @unchecked Sendable {
     }
 
     /// A status that fails or times out counts as dirty: never suggest removing work we could not check.
+    /// Untracked files are asked for by flag, because `status.showUntrackedFiles=no` would hide them,
+    /// and git worktree remove then deletes them without asking.
     static func hasUncommittedChanges(at path: String, git: String) -> Bool {
-        let status = Shell.run(git, ["-C", path, "status", "--porcelain"], timeout: 60)
+        let status = Shell.run(git, ["-C", path, "status", "--porcelain", "--untracked-files=normal"], timeout: 60)
         return status.status != 0 || status.timedOut || !status.output.isEmpty
     }
 
@@ -194,11 +196,12 @@ final class GitInspector: @unchecked Sendable {
             .output.split(separator: "\n").map(String.init)
         // A change across thousands of files is no squash merge to look for, and would not fit one command line.
         guard !files.isEmpty, files.count <= 1_000 else { return nil }
-        let own = Shell.run("/bin/bash", ["-c", "\"$1\" -C \"$2\" diff --no-renames \"$3\" \"$4\" | \"$1\" patch-id --stable", "bash", git, path, base, head], timeout: 60)
+        // --verbatim: patch ids otherwise ignore whitespace, so a re-indent made after the merge would match it.
+        let own = Shell.run("/bin/bash", ["-c", "\"$1\" -C \"$2\" diff --no-renames \"$3\" \"$4\" | \"$1\" patch-id --verbatim", "bash", git, path, base, head], timeout: 60)
             .output.split(separator: " ").first.map(String.init)
         guard let own, !own.isEmpty else { return nil }
         // One stream of patches for every candidate commit, which patch-id hashes one by one.
-        let script = "\"$1\" -C \"$2\" log -p --no-renames --format='commit %H' -n 2000 \"$3..$4\" -- \"${@:5}\" | \"$1\" patch-id --stable"
+        let script = "\"$1\" -C \"$2\" log -p --no-renames --format='commit %H' -n 2000 \"$3..$4\" -- \"${@:5}\" | \"$1\" patch-id --verbatim"
         let candidates = Shell.run("/bin/bash", ["-c", script, "bash", git, path, base, defaultRef] + files, timeout: 120)
         for line in candidates.output.split(separator: "\n") {
             let parts = line.split(separator: " ")
