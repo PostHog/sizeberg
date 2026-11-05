@@ -63,6 +63,9 @@ final class ScanModel {
     var collapsedRepositories: Set<Int> = []
     /// The cleanup sheet's state while it is open.
     var cleanup: CleanupSession?
+    /// Items a cleanup deleted. They leave the list at once; the rescan after a big delete can take a
+    /// minute, because every shared file the deleted items held has to be counted again.
+    private(set) var deletedIDs: Set<Int> = []
 
     init() {
         // Debug aid for SIZEBERG_SNAPSHOT: "first" scans without a report, "full" runs a full scan over the last one.
@@ -72,9 +75,27 @@ final class ScanModel {
             return
         }
         report = Report.loadCached()
-        // "rescan" runs a normal rescan over the last report, to measure what a scan costs the app.
-        guard snapshotScan == "full" || snapshotScan == "rescan" else { return }
-        DispatchQueue.main.async { self.scan(full: snapshotScan == "full") }
+        if snapshotScan == "full" {
+            DispatchQueue.main.async { self.scan(full: true) }
+            return
+        }
+        // Snapshots show the last report as it is, unless "rescan" asks for one.
+        if ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT"] != nil, snapshotScan != "rescan" {
+            return
+        }
+        // The last report opens at once, but folders change while the app is closed: rescan right away,
+        // and again on coming back to the app once the numbers are a few minutes old.
+        DispatchQueue.main.async { self.scan() }
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.rescanIfOld() }
+        }
+    }
+
+    static let freshFor: TimeInterval = 5 * 60
+
+    private func rescanIfOld() {
+        guard let report, cleanup == nil, Date().timeIntervalSince(report.scannedAt) > Self.freshFor else { return }
+        scan()
     }
 
     /// A scan or a cleanup is running: scanning while folders are deleted would report a half state.
@@ -113,18 +134,38 @@ final class ScanModel {
         focusedID = nil
     }
 
+    /// Group ids are positions in the report and can shift between scans, so the selection, the focused
+    /// item and the folded repositories move over by path. Items that are gone drop out.
     private func finish(with report: Report) {
+        let previous = self.report
+        let carry = { (ids: Set<Int>) -> Set<Int> in
+            Self.sameItems(ids, from: previous, in: report)
+        }
+        selection = carry(selection)
+        collapsedRepositories = carry(collapsedRepositories)
+        focusedID = focusedID.flatMap { carry([$0]).first }
         self.report = report
+        deletedIDs = []
         isScanning = false
         isFullScan = false
         progress = nil
-        clearSelection()
-        focusedID = nil
+    }
+
+    private static func sameItems(_ ids: Set<Int>, from old: Report?, in new: Report) -> Set<Int> {
+        guard let old else { return [] }
+        let idByPath = Dictionary(new.groups.map { ($0.kind.rawValue + $0.path, $0.id) }, uniquingKeysWith: { first, _ in first })
+        return Set(ids.compactMap { id in
+            if id == Report.buildOutputID {
+                return new.buildOutputItem == nil ? nil : id
+            }
+            return old.group(id).flatMap { idByPath[$0.kind.rawValue + $0.path] }
+        })
     }
 
     /// Groups the sidebar filter and the size toggle let through, before the search text.
     func groups(in report: Report, filter: Filter) -> [GroupReport] {
         report.items.filter { group in
+            guard !deletedIDs.contains(group.id) else { return false }
             switch filter {
             case .all: break
             case .worktrees: guard group.kind == .worktree || group.kind == .mainCheckout else { return false }
@@ -241,6 +282,9 @@ final class ScanModel {
                 cleanup?.items[index].status = .finished(outcome)
                 if outcome.ran {
                     selection.subtract(step.isTrim ? [Report.buildOutputID] : step.groupIDs)
+                    if !step.isTrim {
+                        deletedIDs.formUnion(step.groupIDs)
+                    }
                 }
             }
             let ran = (cleanup?.items ?? []).filter(\.ran).map(\.step)
