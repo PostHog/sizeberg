@@ -12,6 +12,7 @@ struct ScanCache {
         var errorCount: Int
         var entryCount: Int
         var trimFolders: [TrimFolder]
+        var trimFolderBytes: [String: Int64]
     }
 
     struct State: Codable {
@@ -23,7 +24,7 @@ struct ScanCache {
     }
 
     /// Bump when the meaning of cached data changes.
-    static let formatVersion = 6
+    static let formatVersion = 7
 
     let directory: URL
 
@@ -106,7 +107,8 @@ struct ScanCache {
             fileCounts: cached.fileCounts,
             errorCount: cached.errorCount,
             entries: entries,
-            trimFolders: cached.trimFolders
+            trimFolders: cached.trimFolders,
+            trimFolderBytes: cached.trimFolderBytes
         )
     }
 
@@ -126,7 +128,8 @@ struct ScanCache {
                 fileCounts: scan.fileCounts,
                 errorCount: scan.errorCount,
                 entryCount: scan.entries.count,
-                trimFolders: scan.trimFolders
+                trimFolders: scan.trimFolders,
+                trimFolderBytes: scan.trimFolderBytes
             )
         }
         let state = State(formatVersion: Self.formatVersion, eventID: eventID, volumeUUID: volumeUUID, segments: groups)

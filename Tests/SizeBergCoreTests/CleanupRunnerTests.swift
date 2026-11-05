@@ -103,7 +103,7 @@ struct CleanupRunnerTests {
                 id: id, kind: .worktree, name: "tree-\(id)", paths: ["/repo/tree-\(id)"], git: nil,
                 buckets: [BucketReport(
                     kind: .buildOutput, apparentBytes: 300, privateBytes: 300, freeableAloneBytes: 300, fileCount: 1,
-                    folders: ["/repo/tree-\(id)/dist"]
+                    folders: [BuildFolder(path: "/repo/tree-\(id)/dist", bytes: 300)]
                 )],
                 apparentBytes: 1_000, privateBytes: 1_000, freeableAloneBytes: 1_000, selectable: true,
                 cleanupCommand: "git -C '/repo' worktree remove '/repo/tree-\(id)'", note: nil
@@ -168,38 +168,18 @@ struct CleanupRunnerTests {
         #expect(paths.allSatisfy { !FileManager.default.fileExists(atPath: $0) })
     }
 
-    /// The copied command deletes every __pycache__ of the checkout with one find. It must leave a
-    /// worktree inside the checkout alone (an item of its own) and the __pycache__ in a venv.
-    @Test func copiedTrimCommandLeavesNestedWorktreesAndVenvs() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("sizeberg-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: root) }
-        let checkout = root.appendingPathComponent("repo")
-        let nested = checkout.appendingPathComponent(".claude/worktrees/topic")
-        let own = checkout.appendingPathComponent("app/__pycache__")
-        let kept = [nested.appendingPathComponent("app/__pycache__"), checkout.appendingPathComponent(".venv/lib/__pycache__")]
-        for folder in [own] + kept {
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        }
-        let group = { (id: Int, kind: GroupKind, path: URL) in
-            GroupReport(
-                id: id, kind: kind, name: path.lastPathComponent, paths: [path.path], git: nil, buckets: [],
-                apparentBytes: 0, privateBytes: 0, freeableAloneBytes: 0, selectable: true, cleanupCommand: nil, note: nil
-            )
-        }
-        let report = Report(
-            scannedAt: Date(), durationSeconds: 1, roots: [], fileCount: 0, errorCount: 0,
-            volume: VolumeInfo(totalBytes: 0, freeBytes: 0, availableForImportantUsageBytes: nil),
-            localSnapshots: [], groups: [group(0, .mainCheckout, checkout), group(1, .worktree, nested)], sharedSets: []
-        )
-        let step = CleanupStep(
-            groupIDs: [0], name: "repo", kind: .mainCheckout, path: checkout.path,
-            command: "", expectedBytes: 0, isTrim: true, folders: [own.path]
-        )
+    /// Deleting build output skips what is not worth it or not ours to delete: a committed dist,
+    /// and the thousands of small __pycache__ folders. The number shrinks to match.
+    @Test func buildOutputLeavesTrackedAndSmallFolders() {
+        let big = BuildFolder(path: "/repo/.turbo", bytes: 8_000_000)
+        let small = BuildFolder(path: "/repo/app/__pycache__", bytes: 100_000)
+        let committed = BuildFolder(path: "/repo/.github/actions/x/dist", bytes: 1_900_000)
 
-        let result = Shell.run("/bin/sh", ["-c", report.trimCommandText(step)], mergeErrors: true)
+        let choice = BuildFolder.choose([big, small, committed], tracked: [committed.path], freeable: 10_000_000)
 
-        #expect(result.status == 0, "\(result.output)")
-        #expect(!FileManager.default.fileExists(atPath: own.path))
-        #expect(kept.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
+        #expect(choice.folders == [big])
+        #expect(choice.freeBytes == 8_000_000)
+        #expect(choice.small == [small])
+        #expect(choice.trackedCount == 1)
     }
 }

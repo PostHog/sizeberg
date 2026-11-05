@@ -42,6 +42,18 @@ func foldersByName(_ folders: [String]) -> [(name: String, paths: [String])] {
         .sorted { ($0.paths.count, $1.name) > ($1.paths.count, $0.name) }
 }
 
+/// What deleting build output leaves in place, like "Leaves 3k+ folders under 1 MB (430 MB) and 3 that git tracks".
+func leftOutText(smallCount: Int, smallBytes: Int64, trackedCount: Int) -> String? {
+    var parts: [String] = []
+    if smallCount > 0 {
+        parts.append("\(roughCount(smallCount)) \(smallCount == 1 ? "folder" : "folders") under \(bytes(BuildFolder.smallBytes)) (\(bytes(smallBytes)))")
+    }
+    if trackedCount > 0 {
+        parts.append("\(trackedCount) that git tracks")
+    }
+    return parts.isEmpty ? nil : "Leaves " + parts.joined(separator: " and ")
+}
+
 /// A short count for names that repeat a lot: 3,888 reads as "3k+".
 func roughCount(_ count: Int) -> String {
     count < 1_000 ? count.formatted() : "\(count / 1_000)k+"

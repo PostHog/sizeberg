@@ -180,28 +180,9 @@ extension Report {
             lines.append("# \(title)")
             lines += commands
         }
-        let trims = steps.filter(\.isTrim).map(trimCommandText)
+        let trims = steps.filter(\.isTrim).map(\.command)
         if !trims.isEmpty {
             lines += ["", "# Build output and caches: leave out folders that hold files git tracks"] + trims
-        }
-        return lines.joined(separator: "\n")
-    }
-
-    /// A trim as a person would type it: every __pycache__ in one find, the other folders by path.
-    /// The find skips worktrees inside the checkout, which are items of their own, and dependency
-    /// folders, whose __pycache__ counts as dependencies. Other names stay listed, because a name
-    /// like dist can be a folder git tracks.
-    func trimCommandText(_ step: CleanupStep) -> String {
-        let isBytecode = { (path: String) in (path as NSString).lastPathComponent == "__pycache__" }
-        let others = step.folders.filter { !isBytecode($0) }
-        var lines = others.isEmpty ? [] : [CleanupRunner.trimCommand(others)]
-        if step.folders.contains(where: isBytecode) {
-            let nested = groups.flatMap(\.paths).filter { $0.hasPrefix(step.path + "/") }.sorted()
-            let skipped = nested.map { "-path \(shellQuote($0))" } + ["node_modules", ".venv", "venv", ".git"].map { "-name \($0)" }
-            lines.append(
-                "find \(shellQuote(step.path)) \\( \(skipped.joined(separator: " -o ")) \\) -prune"
-                    + " -o -type d -name __pycache__ -prune -exec rm -rf {} +"
-            )
         }
         return lines.joined(separator: "\n")
     }
@@ -215,6 +196,18 @@ extension Report {
     /// of several items frees too, and is not counted.
     public var trimAllBytes: Int64 {
         groups.reduce(0) { $0 + $1.trimBytes }
+    }
+
+    /// Build output and caches the build output item leaves in place: folders under
+    /// `BuildFolder.smallBytes`, and folders git tracks.
+    public var buildOutputLeftOut: (smallCount: Int, smallBytes: Int64, trackedCount: Int) {
+        let buckets = groups.filter { [.mainCheckout, .worktree, .project].contains($0.kind) && $0.git?.status != .missing }
+            .flatMap(\.buckets).filter(\.kind.isTrimmable)
+        return (
+            buckets.reduce(0) { $0 + ($1.smallFolderCount ?? 0) },
+            buckets.reduce(0) { $0 + ($1.smallFolderBytes ?? 0) },
+            buckets.reduce(0) { $0 + ($1.trackedFolderCount ?? 0) }
+        )
     }
 }
 
@@ -239,7 +232,7 @@ extension GroupReport {
     }
 
     public var trimBytes: Int64 {
-        trimmableBuckets.reduce(0) { $0 + $1.freeableAloneBytes }
+        trimmableBuckets.reduce(0) { $0 + ($1.foldersFreeBytes ?? $1.freeableAloneBytes) }
     }
 
     /// What "Select Stale" picks: stale worktrees without local work, and worktrees whose folder is gone.

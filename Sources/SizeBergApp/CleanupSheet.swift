@@ -78,7 +78,7 @@ struct CleanupSheet: View {
                         .foregroundStyle(.secondary)
                 }
                 if !session.trimItems.isEmpty {
-                    Text("Build output and caches go from items that stay: your source, commits and dependencies are not touched, and the next build puts the folders back. Folders that hold files git tracks stay. Stop dev servers and builds first.")
+                    Text("Build output and caches go from items that stay: your source, commits and dependencies are not touched, and the next build puts the folders back. Folders that hold files git tracks stay, and so do folders under 1 MB. Stop dev servers and builds first.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }

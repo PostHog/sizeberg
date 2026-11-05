@@ -22,6 +22,8 @@ struct WalkUnit {
     var filesOnly: Bool
     /// A segment folder whose kind differs from the group's, such as a node_modules at the group root.
     var startsTrimFolder = false
+    /// The build output or cache folder this unit lies in, whose size its files add to.
+    var trimFolder: String? = nil
 }
 
 /// Work queue that walker threads also push into, to split big directories while others idle.
@@ -155,6 +157,8 @@ struct SharedEntry {
 struct TrimFolder: Codable, Sendable {
     var path: String
     var kind: BucketKind
+    /// Set when the report is built, from `GroupScan.trimFolderBytes`.
+    var bytes: Int64 = 0
 
     /// True when a folder of `kind` below a folder of `parent` starts rebuildable data.
     static func starts(_ kind: BucketKind, below parent: BucketKind) -> Bool {
@@ -175,8 +179,25 @@ struct TrimFolder: Codable, Sendable {
         guard !kept.isEmpty else { return trimmable }
         return trimmable.flatMap { folder -> [TrimFolder] in
             guard kept.contains(where: { $0.hasPrefix(folder.path + "/") }) else { return [folder] }
-            return entries(of: folder.path, around: kept).map { TrimFolder(path: $0, kind: folder.kind) }
+            return entries(of: folder.path, around: kept).map {
+                TrimFolder(path: $0, kind: folder.kind, bytes: allocatedBytes(of: $0))
+            }
         }
+    }
+
+    /// Size of one entry next to a kept dependency folder. Only these few are read again; the walk
+    /// counts the cache folder as a whole and cannot tell its parts apart.
+    private static func allocatedBytes(of path: String) -> Int64 {
+        let url = URL(fileURLWithPath: path)
+        let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .isDirectoryKey]
+        guard let values = try? url.resourceValues(forKeys: keys) else { return 0 }
+        guard values.isDirectory == true else { return Int64(values.totalFileAllocatedSize ?? 0) }
+        let files = FileManager.default.enumerator(at: url, includingPropertiesForKeys: Array(keys))
+        var total: Int64 = 0
+        while let file = files?.nextObject() as? URL {
+            total += Int64((try? file.resourceValues(forKeys: keys))?.totalFileAllocatedSize ?? 0)
+        }
+        return total
     }
 
     private static func entries(of path: String, around kept: [String]) -> [String] {
@@ -207,6 +228,8 @@ struct GroupScan {
     var entries: [SharedEntry] = []
     /// Folders where rebuildable data starts, for trimming an item that stays.
     var trimFolders: [TrimFolder] = []
+    /// Bytes per trim folder path. A folder read by several threads adds up from several parts.
+    var trimFolderBytes: [String: Int64] = [:]
 
     var fileCount: Int {
         fileCounts.reduce(0, +)
@@ -224,6 +247,7 @@ struct GroupScan {
         errorCount += other.errorCount
         entries += other.entries
         trimFolders += other.trimFolders
+        trimFolderBytes.merge(other.trimFolderBytes, uniquingKeysWith: +)
     }
 }
 
@@ -284,7 +308,8 @@ final class Walker: @unchecked Sendable {
             let startsTrimFolder = !segment.filesOnly && TrimFolder.starts(segment.kind, below: groups[segment.group].defaultKind)
             return WalkUnit(
                 path: segment.path, group: segment.group, segment: index, kind: segment.kind,
-                filesOnly: segment.filesOnly, startsTrimFolder: startsTrimFolder
+                filesOnly: segment.filesOnly, startsTrimFolder: startsTrimFolder,
+                trimFolder: startsTrimFolder ? segment.path : nil
             )
         }
         guard !units.isEmpty else { return [:] }
@@ -417,7 +442,10 @@ final class WalkWorker {
         if unit.startsTrimFolder {
             scan.trimFolders.append(TrimFolder(path: unit.path, kind: unit.kind))
         }
-        walkDirectory(fd: fd, path: unit.path, kind: unit.kind, unit: unit, filesOnly: unit.filesOnly, into: &scan)
+        walkDirectory(
+            fd: fd, path: unit.path, kind: unit.kind, trimFolder: unit.trimFolder, unit: unit,
+            filesOnly: unit.filesOnly, into: &scan
+        )
     }
 
     /// Reads a whole directory first, then descends, so one read buffer per thread is enough.
@@ -426,6 +454,7 @@ final class WalkWorker {
         fd: Int32,
         path: String,
         kind: BucketKind,
+        trimFolder: String?,
         unit: WalkUnit,
         filesOnly: Bool,
         into scan: inout GroupScan
@@ -434,6 +463,7 @@ final class WalkWorker {
         let settings = walker.groups[unit.group]
         let device = scan.device
         var subdirectories: [String] = []
+        var bytes: Int64 = 0
         let complete = reader.read(directory: fd) { entry in
             switch entry.type {
             case BulkReader.directory:
@@ -442,8 +472,10 @@ final class WalkWorker {
                     subdirectories.append(name)
                 }
             case BulkReader.regularFile:
+                bytes += entry.allocatedBytes
                 visitFile(entry, kind: kind, into: &scan)
             default:
+                bytes += entry.allocatedBytes
                 scan.apparentBytes[kind.rawValue] += entry.allocatedBytes
                 scan.unsharedBytes[kind.rawValue] += entry.allocatedBytes
                 tally.apparentBytes += entry.allocatedBytes
@@ -452,6 +484,9 @@ final class WalkWorker {
         }
         if !complete {
             scan.errorCount += 1
+        }
+        if let trimFolder {
+            scan.trimFolderBytes[trimFolder, default: 0] += bytes
         }
         guard !filesOnly else { return }
 
@@ -463,10 +498,16 @@ final class WalkWorker {
             let childKind = settings.classify
                 ? Classifier.kind(forDirectory: name, parent: kind, path: childPath)
                 : settings.defaultKind
-            if TrimFolder.starts(childKind, below: kind) || TrimFolder.isKeptInsideCache(childKind, below: kind) {
+            let startsTrimFolder = TrimFolder.starts(childKind, below: kind)
+            if startsTrimFolder || TrimFolder.isKeptInsideCache(childKind, below: kind) {
                 scan.trimFolders.append(TrimFolder(path: childPath, kind: childKind))
             }
-            let child = WalkUnit(path: childPath, group: unit.group, segment: unit.segment, kind: childKind, filesOnly: false)
+            // A kept dependency folder inside a cache does not add to the cache's size.
+            let childTrimFolder = startsTrimFolder ? childPath : (childKind == kind ? trimFolder : nil)
+            let child = WalkUnit(
+                path: childPath, group: unit.group, segment: unit.segment, kind: childKind,
+                filesOnly: false, trimFolder: childTrimFolder
+            )
             if childKind == .dependencies, kind != .dependencies {
                 queue.deferDependencies(child)
                 continue
@@ -480,7 +521,10 @@ final class WalkWorker {
                 scan.errorCount += 1
                 continue
             }
-            walkDirectory(fd: childFD, path: childPath, kind: childKind, unit: unit, filesOnly: false, into: &scan)
+            walkDirectory(
+                fd: childFD, path: childPath, kind: childKind, trimFolder: childTrimFolder, unit: unit,
+                filesOnly: false, into: &scan
+            )
         }
     }
 

@@ -523,8 +523,41 @@ private struct ReportBuilder {
     let gitInfos: [Int: GitInfo]
     let dockerUsage: String?
 
+    /// Build output and cache folders per group, with a kept dependency folder split out of its cache.
+    private func buildFolders() -> [Int: [BucketKind: [BuildFolder]]] {
+        var byGroup: [Int: [BucketKind: [BuildFolder]]] = [:]
+        for (index, scan) in scans.enumerated() {
+            guard let scan, !scan.trimFolders.isEmpty else { continue }
+            let recorded = scan.trimFolders.map { folder in
+                TrimFolder(path: folder.path, kind: folder.kind, bytes: scan.trimFolderBytes[folder.path] ?? 0)
+            }
+            byGroup[index] = Dictionary(grouping: TrimFolder.excludingDependencies(recorded), by: \.kind).mapValues { found in
+                found.map { BuildFolder(path: $0.path, bytes: $0.bytes) }.sorted { $0.path < $1.path }
+            }
+        }
+        return byGroup
+    }
+
+    /// Which of the folders big enough to delete hold files git tracks, per checkout or worktree.
+    /// In parallel. A checkout git does not answer for is left as is; the cleanup checks again
+    /// right before it deletes anything.
+    private func trackedFolders(_ folders: [Int: [BucketKind: [BuildFolder]]]) -> [Int: Set<String>] {
+        let checkouts = folders.keys.filter { [.mainCheckout, .worktree].contains(specs[$0].kind) }
+        let found = Locked([Int: Set<String>]())
+        DispatchQueue.concurrentPerform(iterations: checkouts.count) { position in
+            let index = checkouts[position]
+            let candidates = folders[index, default: [:]].values.joined().filter { $0.bytes >= BuildFolder.smallBytes }.map(\.path)
+            guard !candidates.isEmpty,
+                  let tracked = CleanupRunner.trackedFolders(in: specs[index].paths[0], among: candidates) else { return }
+            found.withLock { $0[index] = tracked }
+        }
+        return found.withLock { $0 }
+    }
+
     func build(start: Date, roots: [String], volume: VolumeInfo, snapshots: [String]) -> Report {
         let kindsPerGroup = BucketKind.allCases.count
+        let allFolders = buildFolders()
+        let tracked = trackedFolders(allFolders)
         var groups: [GroupReport] = []
         for (index, spec) in specs.enumerated() {
             if let fixed = spec.fixedBytes {
@@ -532,19 +565,26 @@ private struct ReportBuilder {
                 continue
             }
             var buckets: [BucketReport] = []
-            let trimFolders = TrimFolder.excludingDependencies(scans[index]?.trimFolders ?? [])
-            let folders = Dictionary(grouping: trimFolders, by: \.kind).mapValues { $0.map(\.path) }
+            let folders = allFolders[index] ?? [:]
             for kind in BucketKind.allCases {
                 let bucket = index * kindsPerGroup + kind.rawValue
                 guard totals.apparentBytes[bucket] > 0 || totals.fileCounts[bucket] > 0 else { continue }
-                buckets.append(BucketReport(
+                var report = BucketReport(
                     kind: kind,
                     apparentBytes: totals.apparentBytes[bucket],
                     privateBytes: totals.privateBytes[bucket],
                     freeableAloneBytes: totals.freeableAloneBytes[bucket],
-                    fileCount: totals.fileCounts[bucket],
-                    folders: kind.isTrimmable ? folders[kind]?.sorted() : nil
-                ))
+                    fileCount: totals.fileCounts[bucket]
+                )
+                if kind.isTrimmable, let found = folders[kind] {
+                    let choice = BuildFolder.choose(found, tracked: tracked[index] ?? [], freeable: report.freeableAloneBytes)
+                    report.folders = choice.folders
+                    report.foldersFreeBytes = choice.freeBytes
+                    report.smallFolderCount = choice.small.count
+                    report.smallFolderBytes = choice.small.reduce(0) { $0 + $1.bytes }
+                    report.trackedFolderCount = choice.trackedCount
+                }
+                buckets.append(report)
             }
             let privateBytes = buckets.reduce(0) { $0 + $1.privateBytes }
             groups.append(GroupReport(

@@ -56,6 +56,48 @@ public struct GitInfo: Codable, Sendable {
     public var status: WorktreeStatus
 }
 
+/// A folder of build output or caches that deleting build output removes, with its size on disk.
+public struct BuildFolder: Codable, Sendable, Hashable {
+    public var path: String
+    /// Allocated bytes of its files, as du counts them. Build output and caches share almost
+    /// nothing, so this is close to what deleting the folder frees.
+    public var bytes: Int64
+
+    public init(path: String, bytes: Int64) {
+        self.path = path
+        self.bytes = bytes
+    }
+
+    /// Smaller folders stay. A Python tree has one __pycache__ of about 100 KB per package:
+    /// thousands of deletes for little space, and every one makes the next import slower.
+    public static let smallBytes: Int64 = 1_000_000
+
+    /// Which folders deleting build output takes, and what that frees.
+    struct Choice {
+        var folders: [BuildFolder]
+        /// The bucket's frees-alone share for the chosen folders.
+        var freeBytes: Int64
+        var small: [BuildFolder]
+        var trackedCount: Int
+    }
+
+    /// Leaves out folders git tracks and folders under `smallBytes`. `freeable` is what deleting all
+    /// of the bucket frees; the chosen folders get the part their size makes up.
+    static func choose(_ all: [BuildFolder], tracked: Set<String>, freeable: Int64) -> Choice {
+        let untracked = all.filter { !tracked.contains($0.path) }
+        let chosen = untracked.filter { $0.bytes >= smallBytes }
+        let allBytes = all.reduce(0) { $0 + $1.bytes }
+        let chosenBytes = chosen.reduce(0) { $0 + $1.bytes }
+        let share = allBytes > 0 ? Double(chosenBytes) / Double(allBytes) : 0
+        return Choice(
+            folders: chosen,
+            freeBytes: Int64(Double(freeable) * share),
+            small: untracked.filter { $0.bytes < smallBytes },
+            trackedCount: all.count - untracked.count
+        )
+    }
+}
+
 public struct BucketReport: Codable, Sendable {
     public var kind: BucketKind
     /// What `du` reports: allocated blocks, hard links counted once.
@@ -67,7 +109,12 @@ public struct BucketReport: Codable, Sendable {
     public var fileCount: Int
     /// The folders where this kind of data starts, such as each __pycache__. Deleting all of them
     /// frees `freeableAloneBytes`. Nil when a trim leaves this kind, and in reports from older versions.
-    public var folders: [String]? = nil
+    public var folders: [BuildFolder]? = nil
+    /// What deleting `folders` frees. Less than `freeableAloneBytes` when small or tracked folders stay.
+    public var foldersFreeBytes: Int64? = nil
+    public var smallFolderCount: Int? = nil
+    public var smallFolderBytes: Int64? = nil
+    public var trackedFolderCount: Int? = nil
 }
 
 public struct GroupReport: Codable, Identifiable, Sendable {

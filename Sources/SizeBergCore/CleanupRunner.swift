@@ -73,7 +73,7 @@ public enum CleanupRunner {
         report.groups.filter { trimming.contains($0.id) && $0.trimBytes > 0 }
             .sorted { $0.trimBytes > $1.trimBytes }
             .map { group in
-            let folders = group.trimmableBuckets.flatMap { $0.folders ?? [] }
+            let folders = group.trimmableBuckets.flatMap { ($0.folders ?? []).map(\.path) }
             return CleanupStep(
                 groupIDs: [group.id], name: group.name, kind: group.kind, path: group.path,
                 command: trimCommand(folders), expectedBytes: group.trimBytes, isTrim: true, folders: folders
@@ -133,28 +133,36 @@ public enum CleanupRunner {
     static func foldersSafeToTrim(_ step: CleanupStep) -> [String] {
         let existing = step.folders.filter { FileManager.default.fileExists(atPath: $0) }
         guard step.kind == .worktree || step.kind == .mainCheckout, !existing.isEmpty else { return existing }
-        guard let tracked = trackedFolders(in: step.path) else { return [] }
-        return existing.filter { !tracked.contains(realPath($0)) }
+        guard let tracked = trackedFolders(in: step.path, among: existing) else { return [] }
+        return existing.filter { !tracked.contains($0) }
     }
 
-    /// Every folder that holds a file git tracks, as real paths. Nil when git does not answer.
-    /// One listing of the whole checkout: passing thousands of folders to git runs into the
-    /// limit of 4,096 arguments per process.
-    private static func trackedFolders(in checkout: String) -> Set<String>? {
+    /// The folders among `folders` that hold a file git tracks. Nil when git does not answer.
+    /// Asks in batches: one process takes at most 4,096 arguments.
+    static func trackedFolders(in checkout: String, among folders: [String]) -> Set<String>? {
         guard let git = Shell.find("git") else { return nil }
         let root = Shell.run(git, ["-C", checkout, "rev-parse", "--show-toplevel"], timeout: 10)
-        let files = Shell.run(git, ["-C", checkout, "ls-files", "--full-name", "-z"], timeout: 60)
-        guard root.status == 0, files.status == 0, !files.timedOut else { return nil }
+        guard root.status == 0 else { return nil }
         let top = realPath(root.output.trimmingCharacters(in: .whitespacesAndNewlines))
-        var folders = Set<String>()
-        for file in files.output.split(separator: "\0") {
-            var folder = top
-            for component in file.split(separator: "/").dropLast() {
-                folder += "/" + component
-                folders.insert(folder)
+        // git answers with paths below the real top folder, so candidates are compared as real paths.
+        let byRealPath = Dictionary(folders.map { (realPath($0), $0) }, uniquingKeysWith: { first, _ in first })
+        var tracked = Set<String>()
+        for start in stride(from: 0, to: folders.count, by: removeBatchSize) {
+            let batch = Array(folders[start..<min(start + removeBatchSize, folders.count)])
+            let files = Shell.run(git, ["-C", checkout, "ls-files", "--full-name", "-z", "--"] + batch, timeout: 60)
+            guard files.status == 0, !files.timedOut else { return nil }
+            for file in files.output.split(separator: "\0") {
+                var folder = top
+                for component in file.split(separator: "/").dropLast() {
+                    folder += "/" + component
+                    if let candidate = byRealPath[folder] {
+                        tracked.insert(candidate)
+                        break
+                    }
+                }
             }
         }
-        return folders
+        return tracked
     }
 
     /// Deletes with rm directly, a batch at a time, to stay under the argument limits.

@@ -167,12 +167,18 @@ struct GroupDetail: View {
             Text("and \(holders.count - Self.listedHolders) more, \(bytes(holders.dropFirst(Self.listedHolders).reduce(0) { $0 + $1.trimBytes })) together")
                 .foregroundStyle(.secondary)
         }
+        let leftOut = report.buildOutputLeftOut
+        if let text = leftOutText(smallCount: leftOut.smallCount, smallBytes: leftOut.smallBytes, trackedCount: leftOut.trackedCount) {
+            Text(text + ". Thousands of small folders free little, and each makes the next build slower.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private static let listedHolders = 12
 
     private func trimRow(_ bucket: BucketReport) -> some View {
-        let folders = bucket.folders ?? []
+        let folders = (bucket.folders ?? []).map(\.path)
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 RoundedRectangle(cornerRadius: 2)
@@ -183,9 +189,17 @@ struct GroupDetail: View {
                     Text(folderSummary(folders))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if let leftOut = leftOutText(
+                        smallCount: bucket.smallFolderCount ?? 0, smallBytes: bucket.smallFolderBytes ?? 0,
+                        trackedCount: bucket.trackedFolderCount ?? 0
+                    ) {
+                        Text(leftOut)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
                 Spacer(minLength: 8)
-                Text(bytes(bucket.freeableAloneBytes))
+                Text(bytes(bucket.foldersFreeBytes ?? bucket.freeableAloneBytes))
                     .monospacedDigit()
                     .fontWeight(.medium)
             }
