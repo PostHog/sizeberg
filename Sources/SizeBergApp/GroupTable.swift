@@ -13,6 +13,11 @@ struct ItemRow: Identifiable {
     /// Cleanup value, or the sum of the worktrees' values for a main checkout.
     let cleanupKey: Int64
     let staleCount: Int
+    /// Sorts working agents first, then by how recently one worked. Zero when none did.
+    var agentKey: Double {
+        guard let agent = group.agent else { return 0 }
+        return agent.isWorking ? .greatestFiniteMagnitude : agent.lastActive?.timeIntervalSince1970 ?? 0
+    }
     /// What trimming frees: build output and caches of the item, or of the checkout and its listed worktrees.
     let trimBytes: Int64
 
@@ -94,6 +99,10 @@ struct GroupTable: View {
                 StatusBadge(group: row.group)
             }
             .width(min: 96, ideal: 112)
+            TableColumn("Agent", value: \.agentKey) { row in
+                AgentCell(agent: row.group.agent)
+            }
+            .width(min: 80, ideal: 96)
             TableColumn("Cleanup", value: \.cleanupKey) { row in
                 cleanupCell(row)
             }

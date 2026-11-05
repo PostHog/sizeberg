@@ -174,28 +174,36 @@ enum BranchState {
     }
 }
 
-/// A coding agent in a checkout: working now, or how long ago it last worked. Older than a few days says nothing.
-struct AgentBadge: View {
+/// A coding agent in a checkout, for the Agent column: working now, or how long ago it last worked.
+/// Older than a few days says nothing; the inspector still shows when.
+struct AgentCell: View {
     static let recentDays: Double = 3
+    static let workingColor = Color.adaptive(light: Color(red: 0.0, green: 0.55, blue: 0.45), dark: .mint)
 
     let agent: AgentState?
 
     var body: some View {
-        if let agent, let text = Self.help(agent) {
-            Image(systemName: "sparkles")
-                .foregroundStyle(agent.isWorking ? AnyShapeStyle(Color.adaptive(light: Color(red: 0.0, green: 0.55, blue: 0.45), dark: .mint)) : AnyShapeStyle(.tertiary))
-                .imageScale(.medium)
-                .help(text)
-                .accessibilityLabel(text)
+        if let agent, let label = Self.label(agent) {
+            Label(label, systemImage: "sparkles")
+                .labelStyle(.titleAndIcon)
+                .font(.callout.weight(agent.isWorking ? .semibold : .regular))
+                .foregroundStyle(agent.isWorking ? AnyShapeStyle(Self.workingColor) : AnyShapeStyle(.secondary))
+                .help(agent.isWorking ? "A coding agent is working here" : "A coding agent last worked here \(label)")
         }
     }
 
-    static func help(_ agent: AgentState) -> String? {
+    static func label(_ agent: AgentState) -> String? {
         if agent.isWorking {
-            return "A coding agent is working here"
+            return "Working"
         }
-        guard let last = agent.lastActive, Date().timeIntervalSince(last) < recentDays * 86_400 else { return nil }
-        return "A coding agent worked here \(last.formatted(.relative(presentation: .named)))"
+        guard let last = agent.lastActive else { return nil }
+        let minutes = Int(Date().timeIntervalSince(last) / 60)
+        switch minutes {
+        case ..<60: return "\(max(minutes, 1)) min ago"
+        case ..<(24 * 60): return "\(minutes / 60) h ago"
+        case ..<(Int(recentDays) * 24 * 60): return "\(minutes / (24 * 60)) d ago"
+        default: return nil
+        }
     }
 }
 
@@ -205,7 +213,6 @@ struct BranchLabel: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            AgentBadge(agent: group.agent)
             if group.kind == .worktree {
                 ForEach(Array(BranchState.states(of: group.git).enumerated()), id: \.offset) { _, state in
                     Image(systemName: state.symbol)
