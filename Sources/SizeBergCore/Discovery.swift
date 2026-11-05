@@ -31,13 +31,15 @@ struct Discovery {
     var repositories: [String] = []
     let home: String
     let git: GitInspector?
+    var scratchpads = ClaudeScratchpads()
 
     func discover() -> [GroupSpec] {
         let rootChildren = roots.flatMap { directories(in: realPath($0)) }
         var specs = repositorySpecs(rootChildren + repositories.map(realPath))
         let claimed = Set(specs.flatMap(\.paths))
         let projects = rootChildren.filter { !claimed.contains($0) }.map(projectSpec)
-        let fixed = cacheSpecs() + systemSpecs()
+        let worktrees = specs.filter { $0.gitSeed != nil }.flatMap(\.paths)
+        let fixed = cacheSpecs() + scratchpadSpecs(keeping: worktrees) + systemSpecs()
         let projectRoom = GroupSet.maxGroups - specs.count - fixed.count - 1
         specs += lumpOverflow(projects, room: projectRoom)
         specs += fixed
@@ -159,6 +161,13 @@ struct Discovery {
             CacheDefinition(name: "Rust toolchains", path: "\(home)/.rustup", cleanup: nil,
                             note: "List toolchains with rustup toolchain list and uninstall the old ones."),
             CacheDefinition(name: "Go module cache", path: "\(home)/go/pkg/mod", cleanup: "go clean -modcache"),
+            // Since PostHog/posthog#129556 every posthog worktree shares these instead of one copy in each .flox/cache.
+            CacheDefinition(name: "PostHog Go modules", path: "\(home)/.cache/posthog/go",
+                            cleanup: "chmod -R u+w ~/.cache/posthog/go && rm -rf ~/.cache/posthog/go",
+                            note: "Shared by every posthog worktree. Go makes module folders read-only, so the command makes them writable first."),
+            CacheDefinition(name: "PostHog Go build cache", path: "\(home)/.cache/posthog/go-build",
+                            cleanup: "rm -rf ~/.cache/posthog/go-build",
+                            note: "Shared by every posthog worktree. The next Go build fills it again."),
             CacheDefinition(name: "pip cache", path: "\(home)/Library/Caches/pip", cleanup: "pip cache purge"),
             CacheDefinition(name: "Homebrew downloads", path: "\(home)/Library/Caches/Homebrew", cleanup: "brew cleanup --prune=all"),
             CacheDefinition(name: "Hugging Face cache", path: "\(home)/.cache/huggingface", cleanup: nil,
@@ -180,6 +189,29 @@ struct Discovery {
                 note: definition.note
             )
         }
+    }
+
+    /// One item for the scratch folders of finished Claude Code sessions. The command names each
+    /// folder, so a session that is still running keeps its own.
+    private func scratchpadSpecs(keeping worktrees: [String]) -> [GroupSpec] {
+        let sessions = scratchpads.sessions(keeping: worktrees)
+        guard !sessions.idle.isEmpty else { return [] }
+        let days = Int(ClaudeScratchpads.idleTime / 86400)
+        var note = "Scratch folders of \(sessions.idle.count) Claude Code sessions idle for \(days) days or more."
+        if sessions.activeCount > 0 {
+            note += " The \(sessions.activeCount) newer sessions keep theirs."
+        }
+        note += " A session that holds a git repository or worktree keeps its folder, since it may hold the only copy of commits."
+        return [GroupSpec(
+            kind: .cache,
+            name: ClaudeScratchpads.itemName,
+            paths: sessions.idle,
+            classify: false,
+            defaultKind: .caches,
+            gitSeed: nil,
+            cleanupCommand: "rm -rf " + sessions.idle.map(shellQuote).joined(separator: " "),
+            note: note
+        )]
     }
 
     /// pnpm keeps one store per layout version. Only the newest one is used by a current pnpm.

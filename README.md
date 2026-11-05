@@ -39,7 +39,7 @@ See [RELEASING.md](RELEASING.md) for how releases are built, signed and publishe
 
 - Wherever you keep your code: SizeBerg walks your home folder for the first folders that hold git repositories, like `~/workspace` or `~/Documents/GitHub`, and scans each of them whole. A repository right in your home folder, like `~/dotfiles`, is an item of its own. It skips `~/Library`, hidden folders, media folders and dependency trees. `--root` scans given folders instead. If your repositories are in Documents, Desktop or Downloads, macOS asks once whether SizeBerg may read that folder.
 - Git repos and all their worktrees, also ones outside those folders, get branch, last use, merged and remote-gone state, squash merges, uncommitted changes and unpushed commits.
-- Developer caches: pnpm stores (each layout version), uv, npm, Yarn, sccache, Playwright, Cargo, Go, pip, Homebrew and more.
+- Developer caches: pnpm stores (each layout version), uv, npm, Yarn, sccache, Playwright, Cargo, Go, pip, Homebrew and more, plus the scratch folders of Claude Code sessions idle for 3 days.
 - Container disks (OrbStack, Docker Desktop) and the Nix store volume, as single numbers.
 
 Inside each folder, files land in buckets: dependencies (`node_modules`, venvs), build output (`target`, `dist`, `.mypy_cache`, ...), caches, git data, and the rest.
@@ -74,7 +74,7 @@ Measured on an M-series MacBook with 18 million files in the scanned folders.
 - Copies outside the scanned folders are not known by name, only detected.
 - A rescan asks APFS again for the copy count of files whose clones were in changed or deleted folders, and of every file that claims to be the only copy, so a clone made outside the scanned folders never makes a file look freeable. A copy deleted outside the scanned folders goes unnoticed until a full scan: its siblings then count as shared, never as freeable. This costs about a second per rescan.
 - "Stale" means quiet for 3 days with merged or remote-gone work, or quiet for 21 days. It is a hint; the detail panel shows why.
-- Clean Up runs the plan's commands after a confirmation that lists every item and command. Deleted files skip the Trash: clones in the Trash would keep their blocks. Each worktree is checked again right before: one with uncommitted changes or commits no remote has is skipped. Commands run in a login shell, the way Terminal would run them. Container disks stay manual. Copy commands still copies the plan instead.
+- Clean Up runs the plan's commands after a confirmation that lists every item and command. Deleted files skip the Trash: clones in the Trash would keep their blocks. Each worktree is checked again right before: one with uncommitted changes, commits no remote has (squash merges count as merged), or any running process in it is skipped, and the sheet names files git ignores that deleting it would lose. Commands run in a login shell, the way Terminal would run them. Container disks stay manual. Copy commands still copies the plan instead.
 
 ## Tried and dropped
 

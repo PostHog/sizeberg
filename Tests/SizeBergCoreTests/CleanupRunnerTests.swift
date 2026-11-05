@@ -41,9 +41,13 @@ struct CleanupRunnerTests {
         #expect(!FileManager.default.fileExists(atPath: worktree.path))
     }
 
-    @Test func worktreeWithNewWorkIsSkipped() throws {
+    /// status.showUntrackedFiles=no hides a new file from a plain git status, and git worktree remove then deletes it.
+    @Test(arguments: [false, true]) func worktreeWithNewWorkIsSkipped(hidesUntrackedFiles: Bool) throws {
         let (root, repo, worktree) = try Self.repoWithWorktree()
         defer { try? FileManager.default.removeItem(at: root) }
+        if hidesUntrackedFiles {
+            try Self.git(["config", "status.showUntrackedFiles", "no"], in: repo)
+        }
         try Data("not committed\n".utf8).write(to: worktree.appendingPathComponent("draft.txt"))
 
         #expect(CleanupRunner.run(Self.step(repo: repo, worktree: worktree)) == .skipped("Has uncommitted changes now."))
@@ -51,7 +55,8 @@ struct CleanupRunnerTests {
     }
 
     /// A trim deletes rebuildable folders from a checkout that stays. A committed dist folder must survive it.
-    @Test func trimKeepsFoldersThatHoldTrackedFiles() throws {
+    /// Also when the item is a plain folder that holds the repository, which git cannot be asked about.
+    @Test(arguments: [false, true]) func trimKeepsFoldersThatHoldTrackedFiles(fromPlainFolder: Bool) throws {
         let (root, repo, _) = try Self.repoWithWorktree()
         defer { try? FileManager.default.removeItem(at: root) }
         let dist = repo.appendingPathComponent("dist")
@@ -64,7 +69,7 @@ struct CleanupRunnerTests {
         try Self.git(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "ship dist"], in: repo)
         let folders = [dist.path, modules.path]
         let step = CleanupStep(
-            groupIDs: [0], name: "repo", kind: .mainCheckout, path: repo.path,
+            groupIDs: [0], name: "repo", kind: fromPlainFolder ? .project : .mainCheckout, path: fromPlainFolder ? root.path : repo.path,
             command: CleanupRunner.trimCommand(folders), expectedBytes: 0, isTrim: true, folders: folders
         )
 
@@ -181,5 +186,55 @@ struct CleanupRunnerTests {
         #expect(choice.freeBytes == 8_000_000)
         #expect(choice.small == [small])
         #expect(choice.trackedCount == 1)
+    }
+
+    /// A dev server, an editor or a shell in a folder leaves no git trace; deleting under it breaks it.
+    @Test func folderWithAProcessInItIsSkipped() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("sizeberg-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("src"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let sleeper = Process()
+        sleeper.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        sleeper.arguments = ["30"]
+        sleeper.currentDirectoryURL = folder.appendingPathComponent("src")
+        try sleeper.run()
+        defer { sleeper.terminate() }
+        let step = CleanupStep(
+            groupIDs: [0], name: "folder", kind: .project, path: folder.path,
+            command: "rm -rf \(shellQuote(folder.path))", expectedBytes: 0
+        )
+
+        let outcome = CleanupRunner.run(step)
+
+        #expect(outcome == .skipped("A running process is working in it (pid \(sleeper.processIdentifier), sleep)."))
+        #expect(FileManager.default.fileExists(atPath: folder.path))
+    }
+
+    /// git worktree remove deletes ignored files without asking. Only the ones that would really be
+    /// lost count: not rebuildable, and not the same as the main checkout's copy.
+    @Test func ignoredFilesListOnlyWhatDeletingWouldLose() throws {
+        let (root, repo, worktree) = try Self.repoWithWorktree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let write = { (folder: URL, path: String, text: String) in
+            let url = folder.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: url)
+        }
+        try write(worktree, ".gitignore", ".env*\nnotes.md\nnode_modules/\n.trunk/\n")
+        try write(worktree, ".env", "SHARED=1\n")
+        try write(repo, ".env", "SHARED=1\n")
+        try write(worktree, ".env.local", "ONLY_HERE=1\n")
+        try write(worktree, "notes.md", "half a thought\n")
+        try write(worktree, "node_modules/pkg/index.js", "x\n")
+        try write(worktree, ".trunk/out/log", "x\n")
+        try Self.git(["add", ".gitignore"], in: worktree)
+        try Self.git(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "ignore"], in: worktree)
+
+        let lost = try #require(IgnoredFiles.lost(in: worktree.path, mainCheckout: repo.path))
+
+        #expect(lost == [
+            IgnoredFile(path: ".env.local", looksSecret: true),
+            IgnoredFile(path: "notes.md", looksSecret: false),
+        ])
     }
 }

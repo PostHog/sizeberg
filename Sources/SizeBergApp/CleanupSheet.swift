@@ -72,7 +72,7 @@ struct CleanupSheet: View {
                     .padding(.vertical, 2)
                 }
                 if !session.deleteItems.isEmpty {
-                    Text("Each worktree and folder is checked again first. A worktree with uncommitted changes or commits no remote has is skipped, and so is a folder that changed since the scan."
+                    Text("Each worktree and folder is checked again first. One with a running process in it, such as a dev server or a terminal, is skipped, and so is a worktree with uncommitted changes or commits no remote has, and a folder that changed since the scan."
                          + (session.keptWithLocalWork > 0 ? " \(session.keptWithLocalWork) stale \(session.keptWithLocalWork == 1 ? "worktree" : "worktrees") with local work \(session.keptWithLocalWork == 1 ? "is" : "are") not in this plan." : ""))
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -168,6 +168,14 @@ private struct StepRow: View {
                         .foregroundStyle(messageColor)
                         .lineLimit(3)
                 }
+                if let ignored = item.ignoredFiles, !ignored.isEmpty, item.status == .waiting {
+                    // A secret-looking file in orange: it may exist nowhere else.
+                    Text(Self.ignoredText(ignored))
+                        .font(.caption)
+                        .foregroundStyle(ignored.contains(where: \.looksSecret) ? AnyShapeStyle(GroupReport.localWorkColor) : AnyShapeStyle(.secondary))
+                        .lineLimit(2)
+                        .help(ignored.map(\.path).joined(separator: "\n"))
+                }
             }
             Spacer(minLength: 8)
             Text(bytes(item.step.expectedBytes))
@@ -196,10 +204,19 @@ private struct StepRow: View {
         }
     }
 
-    /// Build output can be thousands of __pycache__ folders, so the row names what goes instead of listing it.
+    /// Build output can be thousands of __pycache__ folders, and scratchpads dozens of sessions, so the row
+    /// names what goes instead of listing it.
     private var commandText: String {
         let step = item.step
-        return step.isTrim ? folderSummary(step.folders, names: 4) : step.command
+        return step.folders.isEmpty ? step.command : folderSummary(step.folders, names: 4)
+    }
+
+    /// Like "Also deletes files git ignores: .env, notes.md and 3 more". Secret-looking ones first.
+    static func ignoredText(_ files: [IgnoredFile]) -> String {
+        let ordered = files.filter(\.looksSecret) + files.filter { !$0.looksSecret }
+        let shown = ordered.prefix(3).map(\.path).joined(separator: ", ")
+        let rest = ordered.count - 3
+        return "Also deletes files git ignores: " + shown + (rest > 0 ? " and \(rest) more" : "")
     }
 
     private var title: String {
