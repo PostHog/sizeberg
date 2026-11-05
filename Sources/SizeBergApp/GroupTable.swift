@@ -79,10 +79,14 @@ struct GroupTable: View {
                     Text(row.group.name)
                         .fontWeight(row.isRepository ? .semibold : .regular)
                         .lineLimit(1)
-                    Text(subtitle(row))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if row.children == nil, row.group.kind == .worktree {
+                        BranchLabel(group: row.group)
+                    } else {
+                        Text(subtitle(row))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
             }
             .width(min: 190, ideal: 230)

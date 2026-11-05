@@ -126,6 +126,77 @@ extension GroupReport {
     }
 }
 
+/// What git says about a worktree's branch, in the colors GitHub uses. A branch can show two:
+/// local work, which keeps the worktree, and how its work ended, merged or with the remote branch deleted.
+enum BranchState {
+    case localWork(String)
+    case merged
+    case remoteGone
+
+    static func states(of git: GitInfo?) -> [BranchState] {
+        guard let git else { return [] }
+        var states: [BranchState] = []
+        if git.hasUncommittedChanges == true {
+            states.append(.localWork("Uncommitted changes"))
+        } else if git.hasUnpushedCommits == true, git.mergedIntoDefault != true {
+            states.append(.localWork("Commits that no remote has"))
+        }
+        if git.mergedIntoDefault == true {
+            states.append(.merged)
+        } else if git.upstreamGone {
+            states.append(.remoteGone)
+        }
+        return states
+    }
+
+    var symbol: String {
+        switch self {
+        case .localWork: return "pencil.circle.fill"
+        case .merged: return "arrow.triangle.merge"
+        case .remoteGone: return "icloud.slash"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .localWork: return GroupReport.localWorkColor
+        case .merged: return .adaptive(light: Color(red: 0.51, green: 0.31, blue: 0.87), dark: Color(red: 0.67, green: 0.51, blue: 1.0))
+        case .remoteGone: return .secondary
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .localWork(let what): return what
+        case .merged: return "Merged into the default branch"
+        case .remoteGone: return "The remote branch is deleted"
+        }
+    }
+}
+
+/// A worktree's branch with its git state in front, like a merged branch with a purple merge icon.
+struct BranchLabel: View {
+    let group: GroupReport
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if group.kind == .worktree {
+                ForEach(Array(BranchState.states(of: group.git).enumerated()), id: \.offset) { _, state in
+                    Image(systemName: state.symbol)
+                        .foregroundStyle(state.color)
+                        .imageScale(.medium)
+                        .help(state.help)
+                        .accessibilityLabel(state.help)
+                }
+            }
+            Text(group.subtitle)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .font(.caption)
+    }
+}
+
 struct StatusBadge: View {
     let group: GroupReport
 
