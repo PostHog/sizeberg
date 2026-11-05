@@ -265,6 +265,13 @@ struct GroupDetail: View {
         }
         if group.kind == .worktree {
             LabeledContent("Merged into default") { yesNo(git.mergedIntoDefault) }
+            if let squash = git.squashMerge {
+                // A squash merge rewrote the branch's commits into one, so git alone calls them unmerged.
+                LabeledContent("Merged as") {
+                    Text(squash.hasPrefix("#") ? "pull request \(squash)" : "squash commit \(squash)")
+                        .textSelection(.enabled)
+                }
+            }
             LabeledContent("Remote branch gone") { yesNo(git.upstreamGone) }
             LabeledContent("Uncommitted changes") { yesNo(git.hasUncommittedChanges, warnWhenTrue: true) }
             LabeledContent("Commits on no remote") {

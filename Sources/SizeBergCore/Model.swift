@@ -56,6 +56,11 @@ public struct GitInfo: Codable, Sendable {
     public var status: WorktreeStatus
     /// The commit HEAD pointed at, so a rescan can tell a commit happened without running git status.
     public var headCommit: String? = nil
+    /// How work that git calls unmerged and unpushed landed anyway: the squash commit on the default
+    /// branch (a short hash), or the merged pull request ("#123"). See `GitInspector.squashMerge`.
+    public var squashMerge: String? = nil
+    /// When the squash check last found nothing for this HEAD, so it is not repeated on every rescan.
+    public var squashCheckedAt: Date? = nil
 }
 
 /// A folder of build output or caches that deleting build output removes, with its size on disk.

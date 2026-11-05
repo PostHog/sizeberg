@@ -44,10 +44,10 @@ public final class Scanner {
             )
         }
         let state = cache.loadState()
-        let unchangedGit = unchangedGitInfos(specs, state: state)
+        let previousGit = previousGitInfos(specs, state: state)
         let gitInfos = Background { () -> [Int: GitInfo] in
             let started = Date()
-            let infos = Self.inspect(specs, git: git, unchanged: unchangedGit)
+            let infos = Self.inspect(specs, git: git, previous: previousGit.all, unchanged: previousGit.unchanged)
             if ProcessInfo.processInfo.environment["SIZEBERG_DEBUG"] != nil {
                 FileHandle.standardError.write(Data(String(format: "git %.1f s\n", Date().timeIntervalSince(started)).utf8))
             }
@@ -172,32 +172,33 @@ public final class Scanner {
         return report
     }
 
-    /// The last report's git answers for worktrees that FSEvents saw no change in since that scan, by path.
-    private func unchangedGitInfos(_ specs: [GroupSpec], state: ScanCache.State?) -> [String: GitInfo] {
-        let paths = specs.compactMap { $0.gitSeed?.worktreePath }
-        guard !fullScan, let state, !paths.isEmpty, let previous = Report.loadCached(),
-              let changes = ChangeLog.changes(since: state.eventID, under: paths) else { return [:] }
-        var infos: [String: GitInfo] = [:]
+    /// The last report's git answers by worktree path, and which worktrees FSEvents saw no change in since.
+    private func previousGitInfos(_ specs: [GroupSpec], state: ScanCache.State?) -> (all: [String: GitInfo], unchanged: Set<String>) {
+        let paths = Set(specs.compactMap { $0.gitSeed?.worktreePath })
+        guard !fullScan, !paths.isEmpty, let previous = Report.loadCached() else { return ([:], []) }
+        var all: [String: GitInfo] = [:]
         for group in previous.groups {
             guard let info = group.git, let path = group.paths.first, paths.contains(path) else { continue }
-            let changed = changes.contains { change in
+            all[path] = info
+        }
+        guard let state, let changes = ChangeLog.changes(since: state.eventID, under: Array(paths)) else { return (all, []) }
+        let unchanged = Set(all.keys.filter { path in
+            !changes.contains { change in
                 change.path == path || change.path.hasPrefix(path + "/")
                     || (change.includesSubdirectories && path.hasPrefix(change.path + "/"))
             }
-            if !changed {
-                infos[path] = info
-            }
-        }
-        return infos
+        })
+        return (all, unchanged)
     }
 
-    private static func inspect(_ specs: [GroupSpec], git: GitInspector?, unchanged: [String: GitInfo]) -> [Int: GitInfo] {
+    private static func inspect(_ specs: [GroupSpec], git: GitInspector?, previous: [String: GitInfo], unchanged: Set<String>) -> [Int: GitInfo] {
         guard let git else { return [:] }
         let seeds = specs.enumerated().compactMap { index, spec in spec.gitSeed.map { (index, $0) } }
         let results = Locked([Int: GitInfo]())
         DispatchQueue.concurrentPerform(iterations: seeds.count) { position in
             let (index, seed) = seeds[position]
-            let info = git.inspect(seed, unchanged: unchanged[seed.worktreePath])
+            let path = seed.worktreePath
+            let info = git.inspect(seed, previous: previous[path], unchanged: unchanged.contains(path))
             results.withLock { $0[index] = info }
         }
         return results.withLock { $0 }

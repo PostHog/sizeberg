@@ -124,9 +124,14 @@ public enum CleanupRunner {
         if GitInspector.hasUncommittedChanges(at: step.path, git: git) {
             return "Has uncommitted changes now."
         }
-        // Stricter than the scan's local-work rule: merged work no remote has is kept too.
+        // Commits no remote has stay, unless they landed through a squash merge, asked again now:
+        // a commit made since the scan is not in that merge.
         if GitInspector.hasUnpushedCommits(at: step.path, git: git) {
-            return "Has commits that no remote has."
+            let head = Shell.run(git, ["-C", step.path, "rev-parse", "HEAD"], timeout: 10).output.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !head.isEmpty, let defaultRef = GitInspector.defaultRef(of: step.path, git: git),
+                  GitInspector.squashMerge(at: step.path, head: head, defaultRef: defaultRef, git: git) != nil else {
+                return "Has commits that no remote has."
+            }
         }
         return nil
     }

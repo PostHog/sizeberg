@@ -54,8 +54,9 @@ final class GitInspector: @unchecked Sendable {
         return entries
     }
 
-    /// `unchanged` is the last scan's answer for this worktree when FSEvents saw no change in it since.
-    func inspect(_ seed: GitSeed, unchanged: GitInfo? = nil) -> GitInfo {
+    /// `previous` is the last scan's answer for this worktree; `unchanged` says FSEvents saw no change in it since.
+    func inspect(_ seed: GitSeed, previous: GitInfo? = nil, unchanged: Bool = false) -> GitInfo {
+        let unchanged = unchanged ? previous : nil
         var info = GitInfo(
             repoPath: seed.repoPath,
             branch: seed.branch,
@@ -92,14 +93,25 @@ final class GitInspector: @unchecked Sendable {
         if let defaultRef = context.defaultRef {
             merged = Shell.run(git, ["-C", path, "merge-base", "--is-ancestor", "HEAD", defaultRef]).status == 0
         }
-        info.mergedIntoDefault = merged
         info.hasUnpushedCommits = Self.hasUnpushedCommits(at: path, git: git)
+        let head = Shell.run(git, ["-C", path, "rev-parse", "HEAD"], timeout: 10).output.trimmingCharacters(in: .whitespacesAndNewlines)
+        info.headCommit = head.isEmpty ? nil : head
+        // Squash merges leave commits that look unmerged and unpushed, though the work landed.
+        if !merged, info.hasUnpushedCommits == true, !head.isEmpty, let defaultRef = context.defaultRef {
+            if let previous, previous.headCommit == head, previous.squashMerge != nil || Self.isRecent(previous.squashCheckedAt) {
+                info.squashMerge = previous.squashMerge
+                info.squashCheckedAt = previous.squashCheckedAt
+            } else {
+                info.squashMerge = Self.squashMerge(at: path, head: head, defaultRef: defaultRef, git: git)
+                info.squashCheckedAt = info.squashMerge == nil ? Date() : nil
+            }
+            merged = info.squashMerge != nil
+        }
+        info.mergedIntoDefault = merged
         guard Self.isStale(info) else { return info }
 
         // git status reads the whole tree, so it only runs where it decides stale vs local work, and only
         // when something changed: no file change and the same HEAD means the same answer as last time.
-        let head = Shell.run(git, ["-C", path, "rev-parse", "HEAD"], timeout: 10).output.trimmingCharacters(in: .whitespacesAndNewlines)
-        info.headCommit = head.isEmpty ? nil : head
         if let unchanged, let known = unchanged.hasUncommittedChanges, unchanged.headCommit == info.headCommit, info.headCommit != nil {
             info.hasUncommittedChanges = known
         } else {
@@ -147,6 +159,56 @@ final class GitInspector: @unchecked Sendable {
         return modificationDate(of: gitDirectory + "/index")
     }
 
+    /// A found nothing stays valid this long: a pull request may merge later, so it is asked again.
+    static let squashRecheckInterval: TimeInterval = 6 * 3600
+
+    private static func isRecent(_ date: Date?) -> Bool {
+        date.map { Date().timeIntervalSince($0) < squashRecheckInterval } ?? false
+    }
+
+    /// Where a branch that git calls unmerged landed anyway, or nil. A squash merge, which PostHog's merge
+    /// queue does, puts one new commit on the default branch and deletes the branch, so the branch's own
+    /// commits are on no remote and not ancestors of the default branch.
+    ///
+    /// First offline: the patch id of the branch's whole change, a stable hash of its diff, is compared with
+    /// the default-branch commits since the branch left that touch the same files (gitsweeper does the same).
+    /// It misses when the merge queue changed the diff, or the pull request got commits the worktree lacks.
+    /// Then, if the GitHub CLI is there and logged in, a search for a merged pull request that contains HEAD.
+    static func squashMerge(at path: String, head: String, defaultRef: String, git: String) -> String? {
+        if let commit = squashCommit(at: path, head: head, defaultRef: defaultRef, git: git) {
+            return commit
+        }
+        guard let gh = Shell.find("gh") else { return nil }
+        // The search also matches pull requests that only mention the hash, so HEAD must be one of the commits.
+        let filter = "[.[] | select(any(.commits[]; .oid == \"\(head)\")) | .number][0] // empty"
+        let result = Shell.run(gh, ["pr", "list", "--state", "merged", "--search", head, "--json", "number,commits", "--jq", filter], cwd: path, timeout: 20)
+        let number = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard result.status == 0, !result.timedOut, Int(number) != nil else { return nil }
+        return "#\(number)"
+    }
+
+    private static func squashCommit(at path: String, head: String, defaultRef: String, git: String) -> String? {
+        let base = Shell.run(git, ["-C", path, "merge-base", defaultRef, head], timeout: 30).output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !base.isEmpty else { return nil }
+        let files = Shell.run(git, ["-C", path, "diff", "--name-only", "--no-renames", base, head], timeout: 60)
+            .output.split(separator: "\n").map(String.init)
+        // A change across thousands of files is no squash merge to look for, and would not fit one command line.
+        guard !files.isEmpty, files.count <= 1_000 else { return nil }
+        let own = Shell.run("/bin/bash", ["-c", "\"$1\" -C \"$2\" diff --no-renames \"$3\" \"$4\" | \"$1\" patch-id --stable", "bash", git, path, base, head], timeout: 60)
+            .output.split(separator: " ").first.map(String.init)
+        guard let own, !own.isEmpty else { return nil }
+        // One stream of patches for every candidate commit, which patch-id hashes one by one.
+        let script = "\"$1\" -C \"$2\" log -p --no-renames --format='commit %H' -n 2000 \"$3..$4\" -- \"${@:5}\" | \"$1\" patch-id --stable"
+        let candidates = Shell.run("/bin/bash", ["-c", script, "bash", git, path, base, defaultRef] + files, timeout: 120)
+        for line in candidates.output.split(separator: "\n") {
+            let parts = line.split(separator: " ")
+            if parts.count == 2, parts[0] == own {
+                return String(parts[1].prefix(10))
+            }
+        }
+        return nil
+    }
+
     private func context(for repo: String) -> RepoContext {
         if let cached = contexts.withLock({ $0[repo] }) {
             return cached
@@ -157,6 +219,10 @@ final class GitInspector: @unchecked Sendable {
     }
 
     private func defaultRef(of repo: String) -> String? {
+        Self.defaultRef(of: repo, git: git)
+    }
+
+    static func defaultRef(of repo: String, git: String) -> String? {
         let symbolic = Shell.run(git, ["-C", repo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
         let name = symbolic.output.trimmingCharacters(in: .whitespacesAndNewlines)
         if symbolic.status == 0, !name.isEmpty {
