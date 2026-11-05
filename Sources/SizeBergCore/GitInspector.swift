@@ -54,7 +54,8 @@ final class GitInspector: @unchecked Sendable {
         return entries
     }
 
-    func inspect(_ seed: GitSeed) -> GitInfo {
+    /// `unchanged` is the last scan's answer for this worktree when FSEvents saw no change in it since.
+    func inspect(_ seed: GitSeed, unchanged: GitInfo? = nil) -> GitInfo {
         var info = GitInfo(
             repoPath: seed.repoPath,
             branch: seed.branch,
@@ -95,8 +96,15 @@ final class GitInspector: @unchecked Sendable {
         info.hasUnpushedCommits = Self.hasUnpushedCommits(at: path, git: git)
         guard Self.isStale(info) else { return info }
 
-        // git status reads the whole tree, so it only runs where it decides stale vs local work.
-        info.hasUncommittedChanges = Self.hasUncommittedChanges(at: path, git: git)
+        // git status reads the whole tree, so it only runs where it decides stale vs local work, and only
+        // when something changed: no file change and the same HEAD means the same answer as last time.
+        let head = Shell.run(git, ["-C", path, "rev-parse", "HEAD"], timeout: 10).output.trimmingCharacters(in: .whitespacesAndNewlines)
+        info.headCommit = head.isEmpty ? nil : head
+        if let unchanged, let known = unchanged.hasUncommittedChanges, unchanged.headCommit == info.headCommit, info.headCommit != nil {
+            info.hasUncommittedChanges = known
+        } else {
+            info.hasUncommittedChanges = Self.hasUncommittedChanges(at: path, git: git)
+        }
         info.status = info.hasLocalWork ? .staleWithLocalWork : .stale
         return info
     }

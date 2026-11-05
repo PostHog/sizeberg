@@ -43,9 +43,11 @@ public final class Scanner {
                 nestedRoots: nestedRoots[index]
             )
         }
+        let state = cache.loadState()
+        let unchangedGit = unchangedGitInfos(specs, state: state)
         let gitInfos = Background { () -> [Int: GitInfo] in
             let started = Date()
-            let infos = Self.inspect(specs, git: git)
+            let infos = Self.inspect(specs, git: git, unchanged: unchangedGit)
             if ProcessInfo.processInfo.environment["SIZEBERG_DEBUG"] != nil {
                 FileHandle.standardError.write(Data(String(format: "git %.1f s\n", Date().timeIntervalSince(started)).utf8))
             }
@@ -54,7 +56,6 @@ public final class Scanner {
         let segments = Self.segments(specs: specs, nestedRoots: nestedRoots)
         let discovered = Date()
 
-        let state = cache.loadState()
         var segmentScans = reuseCachedScans(segments, state: state, volumeUUID: volumeUUID)
         let toWalk = segments.indices.filter { segmentScans[$0] == nil }
         // Copy counts in reused segments go stale when a copy elsewhere is deleted or changed:
@@ -65,6 +66,7 @@ public final class Scanner {
             FileHandle.standardError.write(Data("copy counts: \(departed.count) departed shared files, \(recount.changed.count) changed in \(recount.segments.count) reused segments\n".utf8))
         }
         let reusedAt = Date()
+        debugMemory("cache loaded")
         let reporter = ProgressReporter(
             specs: specs,
             segments: segments,
@@ -97,6 +99,7 @@ public final class Scanner {
         }
         let livePrivateSizes = finisher.waitForAll()
         let walked = Date()
+        debugMemory("walked")
         if let tracePath = ProcessInfo.processInfo.environment["SIZEBERG_TRACE"] {
             Self.writeTrace(to: tracePath, segments: segments, specs: specs, finishTimes: walker.segmentFinishTimes.withLock { $0 })
         }
@@ -104,15 +107,6 @@ public final class Scanner {
         _ = reporter.settle(from: segmentScans)
         reporter.phase(.matching)
 
-        var scans = [GroupScan?](repeating: nil, count: specs.count)
-        for (index, scan) in segmentScans {
-            let group = segments[index].group
-            if scans[group] == nil {
-                scans[group] = scan
-            } else {
-                scans[group]?.merge(scan)
-            }
-        }
         let snapshots = Self.localSnapshots()
         // A snapshot holds old blocks, which changes private sizes everywhere. Ask APFS again.
         var knownPrivateSizes = fullScan || !snapshots.isEmpty ? [:] : cache.loadPrivateSizes()
@@ -132,10 +126,14 @@ public final class Scanner {
         for record in livePrivateSizes {
             knownPrivateSizes[record.key] = record
         }
+        // The cache only needs the segment scans, so it is saved before they are merged per group.
+        saveCache(segments: segments, scans: segmentScans, walked: Set(toWalk + recount.segments), eventID: eventID, volumeUUID: volumeUUID)
+        let scans = Self.mergeByGroup(&segmentScans, segments: segments, groupCount: specs.count)
+        debugMemory("merged")
         let totals = Aggregator(scans: scans, knownPrivateSizes: knownPrivateSizes, isDebugging: isDebugging).run()
         let aggregated = Date()
+        debugMemory("aggregated")
         reporter.phase(.saving)
-        saveCache(segments: segments, scans: segmentScans, walked: Set(toWalk + recount.segments), eventID: eventID, volumeUUID: volumeUUID)
         try? cache.savePrivateSizes(totals.privateSizes)
 
         let walkedGroups = Set(toWalk.map { segments[$0].group })
@@ -174,13 +172,32 @@ public final class Scanner {
         return report
     }
 
-    private static func inspect(_ specs: [GroupSpec], git: GitInspector?) -> [Int: GitInfo] {
+    /// The last report's git answers for worktrees that FSEvents saw no change in since that scan, by path.
+    private func unchangedGitInfos(_ specs: [GroupSpec], state: ScanCache.State?) -> [String: GitInfo] {
+        let paths = specs.compactMap { $0.gitSeed?.worktreePath }
+        guard !fullScan, let state, !paths.isEmpty, let previous = Report.loadCached(),
+              let changes = ChangeLog.changes(since: state.eventID, under: paths) else { return [:] }
+        var infos: [String: GitInfo] = [:]
+        for group in previous.groups {
+            guard let info = group.git, let path = group.paths.first, paths.contains(path) else { continue }
+            let changed = changes.contains { change in
+                change.path == path || change.path.hasPrefix(path + "/")
+                    || (change.includesSubdirectories && path.hasPrefix(change.path + "/"))
+            }
+            if !changed {
+                infos[path] = info
+            }
+        }
+        return infos
+    }
+
+    private static func inspect(_ specs: [GroupSpec], git: GitInspector?, unchanged: [String: GitInfo]) -> [Int: GitInfo] {
         guard let git else { return [:] }
         let seeds = specs.enumerated().compactMap { index, spec in spec.gitSeed.map { (index, $0) } }
         let results = Locked([Int: GitInfo]())
         DispatchQueue.concurrentPerform(iterations: seeds.count) { position in
             let (index, seed) = seeds[position]
-            let info = git.inspect(seed)
+            let info = git.inspect(seed, unchanged: unchanged[seed.worktreePath])
             results.withLock { $0[index] = info }
         }
         return results.withLock { $0 }
@@ -332,6 +349,40 @@ public final class Scanner {
             }
         }
         return owners
+    }
+
+    /// Debug aid for SIZEBERG_DEBUG: the memory footprint at a step of the scan, as Activity Monitor shows it.
+    private func debugMemory(_ step: String) {
+        guard isDebugging else { return }
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let status = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+        }
+        guard status == KERN_SUCCESS else { return }
+        FileHandle.standardError.write(Data("memory \(step): \(info.phys_footprint / 1_000_000) MB\n".utf8))
+    }
+
+    /// One scan per group from its segment scans, which it empties as it goes, so every entry is held
+    /// once at a time: a rescan holds about ten million of them. Each group's entries get one allocation.
+    static func mergeByGroup(_ segmentScans: inout [Int: GroupScan], segments: [Segment], groupCount: Int) -> [GroupScan?] {
+        var entryCounts = [Int](repeating: 0, count: groupCount)
+        for (index, scan) in segmentScans {
+            entryCounts[segments[index].group] += scan.entries.count
+        }
+        var scans = [GroupScan?](repeating: nil, count: groupCount)
+        // Group by group, so only one group's new array exists next to the segment scans not yet merged.
+        for index in segmentScans.keys.sorted(by: { (segments[$0].group, $0) < (segments[$1].group, $1) }) {
+            guard let scan = segmentScans.removeValue(forKey: index) else { continue }
+            let group = segments[index].group
+            if scans[group] == nil {
+                var first = GroupScan()
+                first.entries.reserveCapacity(entryCounts[group])
+                scans[group] = first
+            }
+            scans[group]?.merge(scan)
+        }
+        return scans
     }
 
     private func saveCache(segments: [Segment], scans: [Int: GroupScan], walked: Set<Int>, eventID: UInt64, volumeUUID: String?) {

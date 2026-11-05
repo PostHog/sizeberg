@@ -72,8 +72,9 @@ final class ScanModel {
             return
         }
         report = Report.loadCached()
-        guard snapshotScan == "full" else { return }
-        DispatchQueue.main.async { self.scan(full: true) }
+        // "rescan" runs a normal rescan over the last report, to measure what a scan costs the app.
+        guard snapshotScan == "full" || snapshotScan == "rescan" else { return }
+        DispatchQueue.main.async { self.scan(full: snapshotScan == "full") }
     }
 
     /// A scan or a cleanup is running: scanning while folders are deleted would report a half state.

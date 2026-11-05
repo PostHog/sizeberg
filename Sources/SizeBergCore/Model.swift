@@ -54,6 +54,8 @@ public struct GitInfo: Codable, Sendable {
     public var hasUncommittedChanges: Bool?
     public var hasUnpushedCommits: Bool?
     public var status: WorktreeStatus
+    /// The commit HEAD pointed at, so a rescan can tell a commit happened without running git status.
+    public var headCommit: String? = nil
 }
 
 /// A folder of build output or caches that deleting build output removes, with its size on disk.

@@ -91,10 +91,14 @@ struct ScanCache {
         return state
     }
 
+    /// Most segments hold no shared files, so they have no entry file at all.
     func loadScan(key: String, cached: CachedGroup) -> GroupScan? {
-        let url = directory.appendingPathComponent("\(key).bin")
         let expectedSize = cached.entryCount * MemoryLayout<SharedEntry>.stride
-        guard let data = try? Data(contentsOf: url), data.count == expectedSize else { return nil }
+        var data = Data()
+        if expectedSize > 0 {
+            guard let read = try? Data(contentsOf: directory.appendingPathComponent("\(key).bin")), read.count == expectedSize else { return nil }
+            data = read
+        }
         var entries = [SharedEntry](
             repeating: SharedEntry(cloneID: 0, inode: 0, allocatedBytes: 0, copies: 0, kind: .source),
             count: cached.entryCount
@@ -117,7 +121,7 @@ struct ScanCache {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var groups: [String: CachedGroup] = [:]
         for (key, scan) in scans {
-            if freshKeys.contains(key) {
+            if freshKeys.contains(key), !scan.entries.isEmpty {
                 let data = scan.entries.withUnsafeBytes { Data($0) }
                 try data.write(to: directory.appendingPathComponent("\(key).bin"), options: .atomic)
             }
@@ -134,7 +138,7 @@ struct ScanCache {
         }
         let state = State(formatVersion: Self.formatVersion, eventID: eventID, volumeUUID: volumeUUID, segments: groups)
         try JSONEncoder().encode(state).write(to: stateURL, options: .atomic)
-        removeOrphans(keeping: Set(groups.keys))
+        removeOrphans(keeping: Set(groups.filter { $0.value.entryCount > 0 }.keys))
     }
 
     private func removeOrphans(keeping keys: Set<String>) {
