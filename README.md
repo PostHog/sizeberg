@@ -74,7 +74,7 @@ Measured on an M-series MacBook with 18 million files in the scanned folders.
 - Copies outside the scanned folders are not known by name, only detected.
 - A rescan asks APFS again for the copy count of files whose clones were in changed or deleted folders, and of every file that claims to be the only copy, so a clone made outside the scanned folders never makes a file look freeable. A copy deleted outside the scanned folders goes unnoticed until a full scan: its siblings then count as shared, never as freeable. This costs about a second per rescan.
 - "Stale" means quiet for 3 days with merged or remote-gone work, or quiet for 21 days. It is a hint; the detail panel shows why.
-- Clean Up runs the plan's commands after a confirmation that lists every item and command. Deleted files skip the Trash: clones in the Trash would keep their blocks. Each worktree is checked again right before: one with uncommitted changes or commits no remote has is skipped. Commands run in a login shell, the way Terminal would run them. Container disks stay manual. Copy commands still copies the plan instead.
+- Clean Up runs the plan's commands after a confirmation that lists every item and command. Deleted files skip the Trash: clones in the Trash would keep their blocks. Each worktree is checked again right before: one with uncommitted changes, commits no remote has (squash merges count as merged), or any running process in it is skipped, and the sheet names files git ignores that deleting it would lose. Commands run in a login shell, the way Terminal would run them. Container disks stay manual. Copy commands still copies the plan instead.
 
 ## Tried and dropped
 

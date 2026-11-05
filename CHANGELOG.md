@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4 (unreleased)
+
+- Clean Up skips a worktree or folder that any running process works in, such as a dev server, an editor or a terminal tab, and names it. Before, only Claude Code and Codex agents kept a worktree.
+- The cleanup sheet names files git ignores that deleting a worktree would lose, such as `.env.local` or notes, with secret-looking ones in orange. `git worktree remove` deletes those without asking. Rebuildable tool output and files identical to the main checkout's copy are left out.
+- The shared Go caches that hogli moved to `~/.cache/posthog/go` and `go-build` show up as cache items.
+
 ## 0.1.3
 
 - Finds your code wherever it lives. Scans looked only in `~/workspace`; now SizeBerg walks your home folder for the first folders that hold git repositories, like `~/code` or `~/Documents/GitHub`, and repositories right in your home folder, like `~/dotfiles`. It skips `~/Library`, hidden folders, media and dependency trees, and the walk adds about a second to a scan. `sizeberg --root` still scans given folders instead.

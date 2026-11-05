@@ -159,6 +159,13 @@ struct Discovery {
             CacheDefinition(name: "Rust toolchains", path: "\(home)/.rustup", cleanup: nil,
                             note: "List toolchains with rustup toolchain list and uninstall the old ones."),
             CacheDefinition(name: "Go module cache", path: "\(home)/go/pkg/mod", cleanup: "go clean -modcache"),
+            // Since PostHog/posthog#129556 every posthog worktree shares these instead of one copy in each .flox/cache.
+            CacheDefinition(name: "PostHog Go modules", path: "\(home)/.cache/posthog/go",
+                            cleanup: "chmod -R u+w ~/.cache/posthog/go && rm -rf ~/.cache/posthog/go",
+                            note: "Shared by every posthog worktree. Go makes module folders read-only, so the command makes them writable first."),
+            CacheDefinition(name: "PostHog Go build cache", path: "\(home)/.cache/posthog/go-build",
+                            cleanup: "rm -rf ~/.cache/posthog/go-build",
+                            note: "Shared by every posthog worktree. The next Go build fills it again."),
             CacheDefinition(name: "pip cache", path: "\(home)/Library/Caches/pip", cleanup: "pip cache purge"),
             CacheDefinition(name: "Homebrew downloads", path: "\(home)/Library/Caches/Homebrew", cleanup: "brew cleanup --prune=all"),
             CacheDefinition(name: "Hugging Face cache", path: "\(home)/.cache/huggingface", cleanup: nil,
