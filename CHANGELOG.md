@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2
+
+- Squash-merged branches count as merged. The merge queue rewrites a pull request's commits into one, so git called them unmerged and unpushed, and those worktrees stayed "stale, local work". SizeBerg now finds the squash commit offline by comparing patch ids, and asks GitHub through `gh`, when it is installed and logged in, for a merged pull request that contains the worktree's HEAD. Clean Up checks the same again right before it deletes, so a commit made after the merge still keeps the worktree.
+- Clean Up opens while a scan runs; only Delete waits for the scan to finish, and says so, instead of a disabled button.
+
 ## 0.1.1
 
 - The list stays current: SizeBerg rescans when it opens and when you come back to it after a few minutes, instead of showing the last scan until you press ⌘R.
