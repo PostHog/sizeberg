@@ -77,7 +77,7 @@ Measured on an M-series MacBook with 18 million files in the scanned folders.
 
 ## Tried and dropped
 
-Ideas that did not hold up on a real machine, so nobody has to try them again. Notes, probes and raw numbers are in `docs/research/`.
+Ideas that did not hold up on a real machine, so nobody has to try them again.
 
 - **`searchfs` catalog scan**: whole volume in 113 seconds on one thread, names and ids only. APFS rejects the attributes the scan needs there.
 - **Random-descent estimate of the file count** (Knuth's estimator), for a progress share on a first scan: off by -72% to +511% with a 10 second budget. Dependency trees are too uneven.

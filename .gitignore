@@ -1,3 +1,5 @@
 .build/
 build/
 .swiftpm/
+# Research notes, probes and raw numbers stay on the machine that made them.
+docs/research/
