@@ -252,7 +252,8 @@ final class ScanModel {
 
     /// Opens the confirmation sheet for the selection.
     func prepareCleanup() {
-        guard let report, !selection.isEmpty, !isBusy, cleanup == nil else { return }
+        // A scan may run: the sheet opens on the current report, and only deleting waits for the scan.
+        guard let report, !selection.isEmpty, cleanup == nil else { return }
         let plan = CleanupRunner.plan(for: report, selection: selection)
         cleanup = CleanupSession(
             items: plan.steps.map { CleanupSession.Item(step: $0) },
@@ -270,7 +271,8 @@ final class ScanModel {
 
     /// Runs the steps one after another, off the main thread, and measures free space around them.
     func runCleanup() {
-        guard var session = cleanup, session.phase == .confirm else { return }
+        // Deleting while a scan reads the same folders would leave the report half old, half new.
+        guard var session = cleanup, session.phase == .confirm, !isScanning else { return }
         session.phase = .running
         session.freeBefore = CleanupRunner.freeBytes()
         cleanup = session
