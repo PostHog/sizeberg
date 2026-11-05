@@ -88,27 +88,50 @@ struct AgentActivity {
 
     /// Current directories of running Claude Code and Codex processes.
     static func agentProcessFolders() -> [String] {
+        processFolders().filter { isAgent(executable: $0.executable) }.map(\.folder)
+    }
+
+    /// A running process and the folder it works in.
+    struct ProcessFolder: Sendable {
+        var pid: pid_t
+        var executable: String
+        var folder: String
+
+        /// What a person would call the process: Claude Code's binary is named after its version.
+        var name: String {
+            executable.contains("/claude/versions/") ? "claude" : (executable as NSString).lastPathComponent
+        }
+    }
+
+    /// The current directory of every process this user can read, this one left out. A dev server,
+    /// an editor or a shell sitting in a folder leaves no other trace that the folder is in use.
+    static func processFolders() -> [ProcessFolder] {
         let count = proc_listallpids(nil, 0)
         guard count > 0 else { return [] }
         var pids = [pid_t](repeating: 0, count: Int(count) * 2)
         let found = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
         guard found > 0 else { return [] }
-        var folders: [String] = []
+        let own = getpid()
+        var folders: [ProcessFolder] = []
         var pathBuffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
-        for pid in pids.prefix(Int(found)) where pid > 0 {
-            guard proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count)) > 0,
-                  isAgent(executable: String(cString: pathBuffer)) else { continue }
+        for pid in pids.prefix(Int(found)) where pid > 0 && pid != own {
             var info = proc_vnodepathinfo()
             let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
             guard proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size) == size else { continue }
             let folder = withUnsafeBytes(of: info.pvi_cdir.vip_path) { raw in
                 String(cString: raw.bindMemory(to: CChar.self).baseAddress!)
             }
-            if !folder.isEmpty {
-                folders.append(folder)
-            }
+            guard !folder.isEmpty else { continue }
+            let executable = proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count)) > 0 ? String(cString: pathBuffer) : ""
+            folders.append(ProcessFolder(pid: pid, executable: executable, folder: folder))
         }
         return folders
+    }
+
+    /// A process working in `path` or below it, if any.
+    static func process(workingIn path: String) -> ProcessFolder? {
+        let real = realPath(path)
+        return processFolders().first { $0.folder == real || $0.folder.hasPrefix(real + "/") }
     }
 
     /// For the check right before a worktree is deleted.

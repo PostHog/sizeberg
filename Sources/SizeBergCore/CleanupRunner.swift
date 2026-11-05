@@ -103,8 +103,17 @@ public enum CleanupRunner {
         }
     }
 
+    /// Any process working in it, not only a coding agent: a dev server, an editor or a shell.
+    static func processReasonToSkip(_ step: CleanupStep) -> String? {
+        guard let process = AgentActivity.process(workingIn: step.path) else { return nil }
+        return "A running process is working in it (pid \(process.pid), \(process.name))."
+    }
+
     /// A folder is removed with rm -rf, so anything written into it since the scan keeps it.
     private static func folderReasonToSkip(_ step: CleanupStep) -> String? {
+        if let reason = processReasonToSkip(step) {
+            return reason
+        }
         if FileManager.default.fileExists(atPath: step.path + "/.git") {
             return "Is a git repository now."
         }
@@ -119,6 +128,9 @@ public enum CleanupRunner {
     private static func worktreeReasonToSkip(_ step: CleanupStep) -> String? {
         if AgentActivity.isWorking(in: step.path) {
             return "A coding agent is working here."
+        }
+        if let reason = processReasonToSkip(step) {
+            return reason
         }
         guard let git = Shell.find("git") else { return "git not found." }
         if GitInspector.hasUncommittedChanges(at: step.path, git: git) {
