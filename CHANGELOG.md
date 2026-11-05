@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.5 (unreleased)
+
+- A squash-merge match must also merge into the squash commit without changing it. Patch ids leave out where a change sits, so an edit moved to another block could still count as merged.
+- The GitHub check only counts pull requests merged into the default branch. A stacked pull request merged into a branch that never reached it no longer makes its worktree look merged.
+
 ## 0.1.4
 
 - Runs on macOS 15 Sequoia. Liquid Glass buttons and the toolbar spacer sit behind availability checks, so Sequoia shows the classic look. CI now launches each build on a macOS 15 runner and scans a test repository there.
