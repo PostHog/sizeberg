@@ -183,7 +183,10 @@ final class GitInspector: @unchecked Sendable {
         guard let gh = Shell.find("gh") else { return nil }
         // The search also matches pull requests that only mention the hash, so HEAD must be one of the commits.
         let filter = "[.[] | select(any(.commits[]; .oid == \"\(head)\")) | .number][0] // empty"
-        let result = Shell.run(gh, ["pr", "list", "--state", "merged", "--search", head, "--json", "number,commits", "--jq", filter], cwd: path, timeout: 20)
+        // Only a pull request merged into the default branch: a stacked one merged into a branch that
+        // never got there did not land.
+        let base = defaultRef.hasPrefix("origin/") ? String(defaultRef.dropFirst("origin/".count)) : defaultRef
+        let result = Shell.run(gh, ["pr", "list", "--state", "merged", "--base", base, "--search", head, "--json", "number,commits", "--jq", filter], cwd: path, timeout: 20)
         let number = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard result.status == 0, !result.timedOut, Int(number) != nil else { return nil }
         return "#\(number)"
@@ -206,10 +209,22 @@ final class GitInspector: @unchecked Sendable {
         for line in candidates.output.split(separator: "\n") {
             let parts = line.split(separator: " ")
             if parts.count == 2, parts[0] == own {
-                return String(parts[1].prefix(10))
+                let commit = String(parts[1])
+                return containsBranch(at: path, commit: commit, head: head, git: git) ? String(commit.prefix(10)) : nil
             }
         }
         return nil
+    }
+
+    /// Whether merging HEAD into the squash commit changes nothing. A patch id leaves out where each
+    /// hunk applies, so an edit moved to another block with the same context lines keeps the id of a
+    /// squash it no longer matches.
+    private static func containsBranch(at path: String, commit: String, head: String, git: String) -> Bool {
+        let merged = Shell.run(git, ["-C", path, "merge-tree", "--write-tree", commit, head], timeout: 60)
+        let tree = Shell.run(git, ["-C", path, "rev-parse", "\(commit)^{tree}"], timeout: 10)
+        guard merged.status == 0, !merged.timedOut, tree.status == 0 else { return false }
+        let mergedTree = merged.output.split(separator: "\n").first.map(String.init) ?? ""
+        return !mergedTree.isEmpty && mergedTree == tree.output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func context(for repo: String) -> RepoContext {
