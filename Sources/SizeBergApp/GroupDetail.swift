@@ -180,7 +180,7 @@ struct GroupDetail: View {
                     .frame(width: 10, height: 10)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(bucket.kind.title)
-                    Text("\(folders.count.formatted()) \(folders.count == 1 ? "folder" : "folders")")
+                    Text(folderSummary(folders))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -191,7 +191,7 @@ struct GroupDetail: View {
             }
             DisclosureGroup("Folders") {
                 // A name that repeats, like __pycache__, shows once with its count; a single folder shows its path.
-                let names = bucket.foldersByName
+                let names = foldersByName(folders)
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(names.prefix(Self.listedNames), id: \.name) { entry in
                         HStack {
@@ -201,7 +201,7 @@ struct GroupDetail: View {
                                 .textSelection(.enabled)
                             Spacer(minLength: 8)
                             if entry.paths.count > 1 {
-                                Text("\(entry.paths.count.formatted()) folders")
+                                Text("in \(roughCount(entry.paths.count)) places")
                                     .foregroundStyle(.tertiary)
                             }
                         }

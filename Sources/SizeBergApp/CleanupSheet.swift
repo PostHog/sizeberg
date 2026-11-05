@@ -189,13 +189,10 @@ private struct StepRow: View {
         }
     }
 
-    /// A trim deletes thousands of __pycache__ folders at times, so it shows the count and names instead.
+    /// Build output can be thousands of __pycache__ folders, so the row names what goes instead of listing it.
     private var commandText: String {
         let step = item.step
-        guard step.isTrim else { return step.command }
-        let count = step.folders.count
-        let names = Set(step.folders.map { ($0 as NSString).lastPathComponent }).sorted().joined(separator: ", ")
-        return "rm -rf on \(count.formatted()) \(count == 1 ? "folder" : "folders"): \(names)"
+        return step.isTrim ? folderSummary(step.folders, names: 4) : step.command
     }
 
     private var title: String {

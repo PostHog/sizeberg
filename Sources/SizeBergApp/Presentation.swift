@@ -35,19 +35,26 @@ extension BucketKind {
     }
 }
 
-extension BucketReport {
-    /// Folders by name, most common first: a Python tree has one __pycache__ per package.
-    var foldersByName: [(name: String, paths: [String])] {
-        Dictionary(grouping: folders ?? []) { ($0 as NSString).lastPathComponent }
-            .map { (name: $0.key, paths: $0.value) }
-            .sorted { ($0.paths.count, $1.name) > ($1.paths.count, $0.name) }
-    }
+/// Folders by name, most common first: a Python tree has one __pycache__ per package.
+func foldersByName(_ folders: [String]) -> [(name: String, paths: [String])] {
+    Dictionary(grouping: folders) { ($0 as NSString).lastPathComponent }
+        .map { (name: $0.key, paths: $0.value) }
+        .sorted { ($0.paths.count, $1.name) > ($1.paths.count, $0.name) }
+}
 
-    var folderSummary: String {
-        let names = foldersByName.map(\.name)
-        let shown = names.prefix(3).joined(separator: ", ")
-        return names.count > 3 ? "\(shown) and \(names.count - 3) more" : shown
+/// A short count for names that repeat a lot: 3,888 reads as "3k+".
+func roughCount(_ count: Int) -> String {
+    count < 1_000 ? count.formatted() : "\(count / 1_000)k+"
+}
+
+/// What a list of folders holds, like "__pycache__ in 3k+ places, .turbo, dist in 24 places and 4 more".
+func folderSummary(_ folders: [String], names shown: Int = 3) -> String {
+    let names = foldersByName(folders)
+    let parts = names.prefix(shown).map { entry in
+        entry.paths.count > 1 ? "\(entry.name) in \(roughCount(entry.paths.count)) places" : entry.name
     }
+    let rest = names.count - shown
+    return parts.joined(separator: ", ") + (rest > 0 ? " and \(rest) more" : "")
 }
 
 extension GroupReport {
