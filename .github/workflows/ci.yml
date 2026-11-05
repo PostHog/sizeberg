@@ -19,6 +19,7 @@ permissions:
 jobs:
     check:
         # macOS 26 with Xcode 26: Swift 6.2 and the macOS 26 SDK the app builds against.
+        # The app runs on macOS 15 too; the sequoia job checks that.
         runs-on: macos-26
         timeout-minutes: 20
         steps:
@@ -39,3 +40,44 @@ jobs:
                   set -euo pipefail
                   codesign --verify --deep --strict build/SizeBerg.app
                   build/SizeBerg.app/Contents/Helpers/sizeberg --help
+
+            # ditto keeps the symbolic links inside Sparkle.framework, which an artifact upload drops.
+            - name: Zip the app
+              run: ditto -c -k --keepParent build/SizeBerg.app build/SizeBerg.zip
+
+            - name: Upload the app
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: SizeBerg
+                  path: build/SizeBerg.zip
+                  retention-days: 3
+
+    sequoia:
+        # The oldest macOS the app supports. Built on macOS 26, run here: a scan with the command, then the app.
+        needs: check
+        runs-on: macos-15
+        timeout-minutes: 10
+        steps:
+            - name: Download the app
+              uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+              with:
+                  name: SizeBerg
+
+            - name: Scan a repository with a worktree
+              run: |
+                  set -euo pipefail
+                  ditto -x -k SizeBerg.zip .
+                  mkdir -p code
+                  git init -q code/app
+                  git -C code/app -c user.name=ci -c user.email=ci@example.com commit -q --allow-empty -m init
+                  git -C code/app worktree add -q ../app-feature
+                  SizeBerg.app/Contents/Helpers/sizeberg --root "$PWD/code" | tee scan.txt
+                  grep -q app-feature scan.txt
+
+            - name: Launch the app
+              run: |
+                  set -euo pipefail
+                  SizeBerg.app/Contents/MacOS/SizeBerg &
+                  sleep 10
+                  kill -0 $! || { echo "SizeBerg quit on macOS 15"; exit 1; }
+                  kill $!

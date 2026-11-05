@@ -20,7 +20,15 @@ version="$(cat VERSION)"
 build_number="${BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 bundle_id="com.posthog.sizeberg"
 
-swift build -c release
+# macOS gives an app Liquid Glass only when its binary says it was built with the macOS 26 SDK or later.
+# The swiftbuild build system writes the deployment target, 15.0, as that SDK version, so the native one
+# builds here, and the check below fails the build if the version is ever too old again.
+swift build -c release --build-system native
+sdk_version="$(vtool -show-build .build/release/SizeBergApp | awk '$1 == "sdk" { print $2 }')"
+if [ "${sdk_version%%.*}" -lt 26 ]; then
+    echo "SizeBergApp says it was built with the macOS $sdk_version SDK, so macOS 26 would show it without Liquid Glass." >&2
+    exit 1
+fi
 
 app="build/SizeBerg.app"
 rm -rf "$app"
@@ -104,7 +112,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2026 PostHog Inc. MIT License.</string>
     <key>LSMinimumSystemVersion</key>
-    <string>26.0</string>
+    <string>15.0</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.developer-tools</string>
     <key>NSHighResolutionCapable</key>

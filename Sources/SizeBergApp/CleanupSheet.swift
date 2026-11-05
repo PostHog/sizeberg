@@ -132,7 +132,7 @@ struct CleanupSheet: View {
                 Button("Delete", role: .destructive) {
                     model.runCleanup()
                 }
-                .buttonStyle(.glassProminent)
+                .prominentButtonStyle()
                 .tint(.red)
                 .disabled(session.items.isEmpty || model.isScanning)
             case .running:

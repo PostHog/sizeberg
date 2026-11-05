@@ -83,7 +83,9 @@ struct ContentView: View {
             .help("Filter the list")
         }
         if model.report != nil {
-            ToolbarSpacer(.fixed, placement: .primaryAction)
+            if #available(macOS 26, *) {
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     model.showInspector.toggle()
@@ -223,7 +225,7 @@ struct EmptyStateView: View {
                 ProgressView("Finding folders")
             } else {
                 Button("Find Repositories and Dev Caches") { model.scan() }
-                    .buttonStyle(.glassProminent)
+                    .prominentButtonStyle()
                     .controlSize(.large)
             }
         }

@@ -3,8 +3,8 @@ import PackageDescription
 
 let package = Package(
     name: "SizeBerg",
-    // macOS 26 is the first release with Liquid Glass; the app uses its SwiftUI APIs without availability checks.
-    platforms: [.macOS(.v26)],
+    // macOS 15 and later. Liquid Glass APIs sit behind #available checks, so macOS 15 gets the classic look.
+    platforms: [.macOS(.v15)],
     dependencies: [
         // Updates for Developer ID builds. Exact, so a release never picks up an updater nobody tested.
         .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),

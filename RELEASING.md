@@ -106,6 +106,6 @@ Losing the key everywhere means no installed app accepts a new update: everyone 
 
 ## Notes
 
-- Releases are arm64 only, like the scan runner: the app needs macOS 26, and Intel Macs on macOS 26 are few.
+- Releases are arm64 only, like the scan runner.
 - The bundle ID is `com.posthog.sizeberg`. Local builds from before the first release used `local.sizeberg`; the cask's `zap` list removes both.
 - Local builds never publish anything; only the workflow creates releases.

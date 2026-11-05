@@ -314,3 +314,15 @@ extension Color {
         })
     }
 }
+
+extension View {
+    /// Liquid Glass on macOS 26 and later, the classic filled button on macOS 15.
+    @ViewBuilder
+    func prominentButtonStyle() -> some View {
+        if #available(macOS 26, *) {
+            buttonStyle(.glassProminent)
+        } else {
+            buttonStyle(.borderedProminent)
+        }
+    }
+}
