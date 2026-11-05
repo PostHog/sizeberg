@@ -16,7 +16,8 @@ Done once. Kept here so a rotated key can be set up the same way.
     gh secret set GH_APP_HOMEBREW_TAP_RELEASER_APP_ID -R PostHog/sizeberg --env homebrew-tap --body <app id>
     ```
 
-- **Signing environment.** Repo settings › Environments: `desktop-signing`, with a deployment tag rule `v*` (no branches). It holds the Apple secrets and the Sparkle key, see below. Until it has them, releases go out ad-hoc signed and cannot update themselves.
+- **Signing environment.** Repo settings › Environments: `desktop-signing`, with a deployment tag rule `v*` (no branches). It holds the Sparkle key, see [Updates](#updates). Both environments exist since 2026-11-05.
+- **Apple secrets.** GitHub org secrets, declared in [posthog-cloud-infra](https://github.com/PostHog/posthog-cloud-infra) `terraform/environments/github/org/secrets/terragrunt.hcl` and shared with selected repos. Until `sizeberg` is in their `selected_repositories`, releases go out ad-hoc signed and cannot update themselves.
 
 ## Every release
 
@@ -62,9 +63,9 @@ The `desktop-signing` environment needs:
 | `APPLE_APP_SPECIFIC_PASSWORD` | secret | App-specific password of the Apple ID used for notarization |
 | `APPLE_ID` | variable or secret | That Apple ID |
 | `APPLE_TEAM_ID` | variable or secret | PostHog's Apple team ID |
-| `SPARKLE_ED_PRIVATE_KEY` | secret | Private EdDSA key that signs updates, see [Updates](#updates) |
+| `SPARKLE_ED_PRIVATE_KEY` | environment secret | Private EdDSA key that signs updates, see [Updates](#updates) |
 
-PostHog already has the Apple ones for its desktop app and for PostPile, as `APPLE_*` org secrets in PostHog's infrastructure code. Ask the infra team to copy the values into this repo's `desktop-signing` environment (`gh secret set <name> -R PostHog/sizeberg --env desktop-signing`), the same way as for PostPile. It needs approval from the desktop app owners and security.
+The Apple ones exist as `APPLE_*` org secrets for PostHog's desktop app (the `Array` repo). A PR to posthog-cloud-infra that adds `sizeberg` to their `selected_repositories` shares them with this repo; the workflow reads `secrets.X`, which finds an org secret too. It needs approval from the infra team, the desktop app owners and security. Shared org secrets are readable by every workflow in this repo, not only by `v*` tag runs; copying the values into the `desktop-signing` environment instead keeps them behind the tag rule, but the copies then need updating by hand when the certificate rotates.
 
 ## Updates
 
@@ -77,25 +78,31 @@ Installed apps update through [Sparkle](https://sparkle-project.org) 2, pinned i
 - The cask has `auto_updates true`, so `brew upgrade` leaves an app that already updated itself alone.
 - To pull a bad release back from updates, delete its `appcast.xml` or mark it a draft: apps then read the feed of the release before it, and never go back to an older version on their own.
 
-The key, set up once:
+The key, set up once. The original lives in [PostHog/secrets](https://github.com/PostHog/secrets) (AWS Secrets Manager, owned by team-security), environment `internal`, app `sizeberg-release`, key `SPARKLE_ED_PRIVATE_KEY`. The GitHub environment holds a working copy for the workflow, which cannot read AWS Secrets Manager. Releases need neither the person who made the key nor their Mac.
 
-1. Generate it with Sparkle's tool, which SwiftPM downloads with the package. It stores the private key in the login keychain and prints the public key:
+1. Generate it with Sparkle's tool, which SwiftPM downloads with the package. It puts the private key in the login keychain and prints the public key:
 
    ```
    swift package resolve
    .build/artifacts/sparkle/Sparkle/bin/generate_keys --account sizeberg
    ```
 
-2. Commit the printed public key as `Resources/sparkle-public-key.txt` (one line, no newline needed).
-3. Export the private key, store it in 1Password, and put it into the `desktop-signing` environment:
+2. Commit the printed public key as `Resources/sparkle-public-key.txt`.
+3. Export the private key once, store the original, set the working copy, then remove both local copies:
 
    ```
    .build/artifacts/sparkle/Sparkle/bin/generate_keys --account sizeberg -x sizeberg-sparkle.key
+   secrets set internal sizeberg-release SPARKLE_ED_PRIVATE_KEY   # paste the file's content in the editor
    gh secret set SPARKLE_ED_PRIVATE_KEY -R PostHog/sizeberg --env desktop-signing < sizeberg-sparkle.key
    rm sizeberg-sparkle.key
+   security delete-generic-password -s "https://sparkle-project.org" -a sizeberg
    ```
 
-Losing the private key means no installed app accepts a new update: everyone would have to reinstall once with Homebrew. Keep the 1Password copy.
+   `secrets set` needs the `secrets-editor` role in the `internal` account (request it with `/awsaccess` in #aws-access), or use the [web app](https://secrets-ui.hedgehog-kitefin.ts.net/) on the tailnet.
+
+To restore the working copy, for example in a new environment: `secrets get internal sizeberg-release SPARKLE_ED_PRIVATE_KEY --plaintext | gh secret set SPARKLE_ED_PRIVATE_KEY -R PostHog/sizeberg --env desktop-signing`.
+
+Losing the key everywhere means no installed app accepts a new update: everyone would have to reinstall once with Homebrew.
 
 ## Notes
 
