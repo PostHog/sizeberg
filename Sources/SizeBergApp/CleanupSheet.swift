@@ -72,7 +72,7 @@ struct CleanupSheet: View {
                     .padding(.vertical, 2)
                 }
                 if !session.deleteItems.isEmpty {
-                    Text("Each worktree and folder is checked again first. A worktree with uncommitted changes or commits no remote has is skipped, and so is a folder that changed since the scan."
+                    Text("Each worktree and folder is checked again first. One with a running process in it, such as a dev server or a terminal, is skipped, and so is a worktree with uncommitted changes or commits no remote has, and a folder that changed since the scan."
                          + (session.keptWithLocalWork > 0 ? " \(session.keptWithLocalWork) stale \(session.keptWithLocalWork == 1 ? "worktree" : "worktrees") with local work \(session.keptWithLocalWork == 1 ? "is" : "are") not in this plan." : ""))
                         .font(.callout)
                         .foregroundStyle(.secondary)
