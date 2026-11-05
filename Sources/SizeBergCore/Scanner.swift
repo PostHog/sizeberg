@@ -1,11 +1,9 @@
 import Foundation
 
 public final class Scanner {
-    public static var defaultRoots: [String] {
-        [NSHomeDirectory() + "/workspace"]
-    }
-
     private let roots: [String]
+    /// Repositories scanned as items by themselves, outside any root.
+    private let repositories: [String]
     private let fullScan: Bool
     private let progress: (@Sendable (ScanProgress) -> Void)?
     private let cache = ScanCache()
@@ -13,8 +11,16 @@ public final class Scanner {
 
     /// `fullScan` ignores the cache and walks everything.
     /// `progress` gets running totals a few times per second, from walker threads.
-    public init(roots: [String], fullScan: Bool = false, progress: (@Sendable (ScanProgress) -> Void)? = nil) {
-        self.roots = roots
+    /// Without `roots`, the scan looks for the folders that hold git repositories in the home folder.
+    public init(roots: [String]? = nil, fullScan: Bool = false, progress: (@Sendable (ScanProgress) -> Void)? = nil) {
+        if let roots {
+            self.roots = roots
+            repositories = []
+        } else {
+            let found = CodeFolders.find()
+            self.roots = found.roots
+            repositories = found.repositories
+        }
         self.fullScan = fullScan
         self.progress = progress
     }
@@ -33,7 +39,7 @@ public final class Scanner {
         ))
         let dockerUsage = Background { Discovery.dockerUsage() }
         let git = GitInspector()
-        let specs = Discovery(roots: roots, home: home, git: git).discover()
+        let specs = Discovery(roots: roots, repositories: repositories, home: home, git: git).discover()
         let nestedRoots = Self.nestedRoots(specs)
         let walkGroups = specs.indices.map { index in
             WalkGroup(

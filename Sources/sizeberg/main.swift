@@ -8,7 +8,8 @@ Usage: sizeberg [--root PATH]... [--full] [--json | --plan]
 Shows what deleting worktrees, dependencies, build output and caches really frees on APFS,
 where copy-on-write clones make du and Finder count shared data many times.
 
-  --root PATH   Folder whose subfolders are scanned (default: ~/workspace). Repeatable.
+  --root PATH   Folder whose subfolders are scanned. Repeatable. Without it, the scan finds the folders
+                that hold git repositories in your home folder, like ~/workspace or ~/Documents/GitHub.
   --full        Walk everything. By default only folders FSEvents reports as changed are walked again.
   --json        Print the full report as JSON.
   --plan        Print cleanup commands for stale worktrees and the package stores. Runs nothing.
@@ -53,14 +54,11 @@ while let argument = arguments.popFirst() {
         exit(2)
     }
 }
-if roots.isEmpty {
-    roots = Scanner.defaultRoots
-}
 
 let showProgress = isatty(STDERR_FILENO) == 1
 /// Debug aid: one line per update with elapsed time and totals, to measure how fast numbers settle.
 let logsProgress = ProcessInfo.processInfo.environment["SIZEBERG_PROGRESS_LOG"] != nil
-let scanner = Scanner(roots: roots, fullScan: fullScan) { progress in
+let scanner = Scanner(roots: roots.isEmpty ? nil : roots, fullScan: fullScan) { progress in
     let confirmed = progress.knownFreeableBytes
     if logsProgress {
         let elapsed = Date().timeIntervalSince(progress.startedAt)

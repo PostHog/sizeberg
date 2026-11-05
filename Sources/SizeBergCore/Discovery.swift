@@ -28,12 +28,13 @@ struct Discovery {
     }
 
     let roots: [String]
+    var repositories: [String] = []
     let home: String
     let git: GitInspector?
 
     func discover() -> [GroupSpec] {
         let rootChildren = roots.flatMap { directories(in: realPath($0)) }
-        var specs = repositorySpecs(rootChildren)
+        var specs = repositorySpecs(rootChildren + repositories.map(realPath))
         let claimed = Set(specs.flatMap(\.paths))
         let projects = rootChildren.filter { !claimed.contains($0) }.map(projectSpec)
         let fixed = cacheSpecs() + systemSpecs()

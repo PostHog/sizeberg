@@ -52,9 +52,8 @@ cask "sizeberg" do
     brew upgrade --cask sizeberg.
 
     ADHOC_CAVEAT_END
-    SizeBerg scans the folders in ~/workspace. Point it elsewhere with:
-
-      sizeberg --root ~/code
+    SizeBerg finds the folders in your home folder that hold git repositories.
+    If they are in Documents, Desktop or Downloads, macOS asks once for access.
 
     Remove its scan cache and settings too with: brew uninstall --zap sizeberg
   EOS

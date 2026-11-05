@@ -222,7 +222,7 @@ struct EmptyStateView: View {
             if model.isScanning {
                 ProgressView("Finding folders")
             } else {
-                Button("Scan ~/workspace and dev caches") { model.scan() }
+                Button("Find Repositories and Dev Caches") { model.scan() }
                     .buttonStyle(.glassProminent)
                     .controlSize(.large)
             }

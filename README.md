@@ -37,7 +37,8 @@ See [RELEASING.md](RELEASING.md) for how releases are built, signed and publishe
 
 ## What it scans
 
-- Every folder in `~/workspace` (change with `--root`). Git repos and all their worktrees, also ones outside the root, get branch, last use, merged and remote-gone state, uncommitted changes and unpushed commits.
+- Wherever you keep your code: SizeBerg walks your home folder for the first folders that hold git repositories, like `~/workspace` or `~/Documents/GitHub`, and scans each of them whole. A repository right in your home folder, like `~/dotfiles`, is an item of its own. It skips `~/Library`, hidden folders, media folders and dependency trees. `--root` scans given folders instead. If your repositories are in Documents, Desktop or Downloads, macOS asks once whether SizeBerg may read that folder.
+- Git repos and all their worktrees, also ones outside those folders, get branch, last use, merged and remote-gone state, squash merges, uncommitted changes and unpushed commits.
 - Developer caches: pnpm stores (each layout version), uv, npm, Yarn, sccache, Playwright, Cargo, Go, pip, Homebrew and more.
 - Container disks (OrbStack, Docker Desktop) and the Nix store volume, as single numbers.
 

@@ -116,7 +116,7 @@ final class ScanModel {
         }
         Task {
             let report = await Task.detached(priority: .userInitiated) {
-                let report = Scanner(roots: Scanner.defaultRoots, fullScan: full) { progressInput.yield($0) }.run()
+                let report = Scanner(fullScan: full) { progressInput.yield($0) }.run()
                 progressInput.finish()
                 try? report.saveToCache()
                 return report
