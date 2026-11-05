@@ -1,0 +1,357 @@
+# Release SizeBerg.
+#
+#   - Push of a v* tag (e.g. v0.1.0) -> GitHub release with the zip and its sha256.
+#   - Then the Homebrew cask is rendered from homebrew/sizeberg.rb.tmpl and committed to
+#     PostHog/homebrew-tap, the same way PostHog/postpile does it.
+#
+# The build job runs in the `desktop-signing` environment (v* tags only), which holds PostHog's
+# Apple Developer ID certificate and notarization login, and the Sparkle key that signs updates.
+# With them the app is signed with the hardened runtime, notarized, and the release carries the
+# appcast.xml installed apps update from. Without them the release is ad-hoc signed, cannot update
+# itself, and the cask tells people how to open it anyway. See RELEASING.md.
+#
+# The Homebrew job runs in the `homebrew-tap` environment, which holds the GitHub App that may
+# write to the tap.
+
+name: Release
+
+on:
+    push:
+        tags:
+            - 'v*'
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: 'Existing v* tag to release (e.g. v0.1.0). Push the tag first.'
+                required: true
+                type: string
+
+# One release per tag: a tag push and a dispatch of the same tag must not race
+# the same GitHub release and cask commit.
+concurrency:
+    group: release-${{ inputs.tag || github.ref_name }}
+    cancel-in-progress: false
+
+permissions:
+    contents: read
+
+jobs:
+    build:
+        # Apple silicon runner with Xcode 26: the app is arm64 only and needs macOS 26.
+        runs-on: macos-26
+        # Notarization waits on Apple, usually minutes, sometimes much longer.
+        timeout-minutes: 60
+        if: github.repository == 'PostHog/sizeberg'
+        environment: desktop-signing
+        permissions:
+            contents: write
+        outputs:
+            version: ${{ steps.version.outputs.version }}
+            sha256: ${{ steps.checksum.outputs.sha256 }}
+            signed: ${{ steps.signing.outputs.signed }}
+        env:
+            TAG: ${{ inputs.tag || github.ref_name }}
+        steps:
+            - name: Validate tag
+              run: |
+                  set -euo pipefail
+                  case "$TAG" in
+                      v*) ;;
+                      *) echo "::error::'${TAG}' is not a v* release tag"; exit 1 ;;
+                  esac
+
+            - name: Checkout repository
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+              with:
+                  # On dispatch, check out the tag itself, not the default branch.
+                  ref: ${{ inputs.tag || github.ref }}
+                  # build.sh numbers builds by commit count.
+                  fetch-depth: 0
+
+            - name: Check the tag matches VERSION
+              id: version
+              run: |
+                  set -euo pipefail
+                  VERSION="$(cat VERSION)"
+                  if [ "v${VERSION}" != "$TAG" ]; then
+                      echo "::error::tag ${TAG} does not match VERSION ${VERSION}"
+                      exit 1
+                  fi
+                  echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+            - name: Test
+              run: swift test
+
+            # Shrinks the icon to about a third; build.sh works without it too.
+            - name: Install pngquant
+              run: brew install pngquant
+
+            # No certificate yet (the secrets are not shared with this repo) means an ad-hoc release,
+            # so releases keep working until access is granted. A certificate without the notarization
+            # login is a setup mistake: fail rather than ship a signed app that Gatekeeper still blocks.
+            - name: Check signing secrets
+              id: signing
+              env:
+                  APPLE_CODESIGN_CERT_BASE64: ${{ secrets.APPLE_CODESIGN_CERT_BASE64 }}
+                  APPLE_CODESIGN_CERT_PASSWORD: ${{ secrets.APPLE_CODESIGN_CERT_PASSWORD }}
+                  APPLE_ID: ${{ vars.APPLE_ID || secrets.APPLE_ID }}
+                  APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+                  APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID || secrets.APPLE_TEAM_ID }}
+                  SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+              run: |
+                  set -euo pipefail
+                  if [ -z "$APPLE_CODESIGN_CERT_BASE64" ]; then
+                      echo "::warning::APPLE_CODESIGN_CERT_BASE64 is not set in the desktop-signing environment: building an ad-hoc signed, not notarized release. See RELEASING.md > Signing and notarization."
+                      echo "signed=false" >> "$GITHUB_OUTPUT"
+                      exit 0
+                  fi
+                  missing=""
+                  for name in APPLE_CODESIGN_CERT_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID SPARKLE_ED_PRIVATE_KEY; do
+                      if [ -z "${!name}" ]; then
+                          missing="$missing $name"
+                      fi
+                  done
+                  if [ -n "$missing" ]; then
+                      echo "::error::APPLE_CODESIGN_CERT_BASE64 is set, but these are missing in the desktop-signing environment:${missing}"
+                      exit 1
+                  fi
+                  # A signed build that cannot update would strand everyone who installs it.
+                  if [ ! -s Resources/sparkle-public-key.txt ]; then
+                      echo "::error::Resources/sparkle-public-key.txt is missing: signed builds must carry the key their updates are checked against"
+                      exit 1
+                  fi
+                  echo "signed=true" >> "$GITHUB_OUTPUT"
+
+            - name: Build the app (ad-hoc signed)
+              if: steps.signing.outputs.signed != 'true'
+              env:
+                  BUILD_NUMBER: ${{ github.run_number }}
+              run: ./build.sh
+
+            # The certificate goes into a keychain of its own that lives only for this job.
+            - name: Build the app (Developer ID signed)
+              if: steps.signing.outputs.signed == 'true'
+              env:
+                  APPLE_CODESIGN_CERT_BASE64: ${{ secrets.APPLE_CODESIGN_CERT_BASE64 }}
+                  APPLE_CODESIGN_CERT_PASSWORD: ${{ secrets.APPLE_CODESIGN_CERT_PASSWORD }}
+                  APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID || secrets.APPLE_TEAM_ID }}
+                  BUILD_NUMBER: ${{ github.run_number }}
+              run: |
+                  set -euo pipefail
+                  KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+                  KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+                  security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+                  security set-keychain-settings -lut 21600 "$KEYCHAIN"
+                  security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+                  echo "$APPLE_CODESIGN_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+                  security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN" -P "$APPLE_CODESIGN_CERT_PASSWORD" -T /usr/bin/codesign
+                  rm "$RUNNER_TEMP/certificate.p12"
+                  security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+                  # The job keychain goes first in the search list, next to the ones that are there.
+                  read -ra EXISTING <<< "$(security list-keychains -d user | tr -d '"')"
+                  security list-keychains -d user -s "$KEYCHAIN" "${EXISTING[@]}"
+                  IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | awk -F'"' -v team="($APPLE_TEAM_ID)" '/Developer ID Application/ && index($2, team) { print $2; exit }')"
+                  if [ -z "$IDENTITY" ]; then
+                      echo "::error::no Developer ID Application identity for team ${APPLE_TEAM_ID} in the certificate"
+                      exit 1
+                  fi
+                  SIGN_IDENTITY="$IDENTITY" ./build.sh
+
+            # notarytool waits for Apple's answer; the ticket is then stapled to the app, so Gatekeeper
+            # accepts it without going online.
+            - name: Notarize
+              if: steps.signing.outputs.signed == 'true'
+              env:
+                  APPLE_ID: ${{ vars.APPLE_ID || secrets.APPLE_ID }}
+                  APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+                  APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID || secrets.APPLE_TEAM_ID }}
+              run: |
+                  set -euo pipefail
+                  ditto -c -k --keepParent build/SizeBerg.app "$RUNNER_TEMP/notarize.zip"
+                  xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+                      --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+                      --wait --timeout 45m
+                  xcrun stapler staple build/SizeBerg.app
+
+            - name: Verify the app bundle
+              env:
+                  VERSION: ${{ steps.version.outputs.version }}
+              run: |
+                  set -euo pipefail
+                  APP=build/SizeBerg.app
+                  codesign --verify --deep --strict "$APP"
+                  [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")" = com.posthog.sizeberg ]
+                  [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = "$VERSION" ]
+                  "$APP/Contents/Helpers/sizeberg" --help >/dev/null
+
+            - name: Verify signing and notarization
+              if: steps.signing.outputs.signed == 'true'
+              run: |
+                  set -euo pipefail
+                  APP=build/SizeBerg.app
+                  codesign -dv --verbose=4 "$APP" 2>&1 | tee "$RUNNER_TEMP/codesign.txt"
+                  grep -q '^Authority=Developer ID Application:' "$RUNNER_TEMP/codesign.txt"
+                  grep -q 'flags=.*runtime' "$RUNNER_TEMP/codesign.txt"
+                  spctl --assess --type execute -vv "$APP"
+                  xcrun stapler validate "$APP"
+                  [ "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$APP/Contents/Info.plist")" = "$(cat Resources/sparkle-public-key.txt)" ]
+
+            - name: Package and checksum
+              id: checksum
+              env:
+                  VERSION: ${{ steps.version.outputs.version }}
+              run: |
+                  set -euo pipefail
+                  cd build
+                  ZIP="SizeBerg-${VERSION}-mac-arm64.zip"
+                  ditto -c -k --keepParent SizeBerg.app "$ZIP"
+                  shasum -a 256 "$ZIP" > "${ZIP}.sha256"
+                  cat "${ZIP}.sha256"
+                  echo "sha256=$(awk '{print $1}' "${ZIP}.sha256")" >> "$GITHUB_OUTPUT"
+
+            # The feed installed apps read, from the latest release. sign_update comes with the Sparkle
+            # package SwiftPM resolved for the build. sparkle:version is CFBundleVersion, which Sparkle
+            # compares, so it must grow with every release: the build number is the workflow run number.
+            - name: Write the update feed
+              if: steps.signing.outputs.signed == 'true'
+              env:
+                  VERSION: ${{ steps.version.outputs.version }}
+                  BUILD_NUMBER: ${{ github.run_number }}
+                  SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+              run: |
+                  set -euo pipefail
+                  ZIP="build/SizeBerg-${VERSION}-mac-arm64.zip"
+                  KEY="$RUNNER_TEMP/sparkle.key"
+                  printf '%s' "$SPARKLE_ED_PRIVATE_KEY" > "$KEY"
+                  ENCLOSURE="$(.build/artifacts/sparkle/Sparkle/bin/sign_update --ed-key-file "$KEY" "$ZIP")"
+                  rm "$KEY"
+                  cat > build/appcast.xml <<XML
+                  <?xml version="1.0" encoding="utf-8"?>
+                  <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+                    <channel>
+                      <title>SizeBerg</title>
+                      <item>
+                        <title>SizeBerg ${VERSION}</title>
+                        <pubDate>$(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S +0000')</pubDate>
+                        <sparkle:version>${BUILD_NUMBER}</sparkle:version>
+                        <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+                        <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+                        <sparkle:releaseNotesLink>https://github.com/PostHog/sizeberg/releases/tag/v${VERSION}</sparkle:releaseNotesLink>
+                        <enclosure url="https://github.com/PostHog/sizeberg/releases/download/v${VERSION}/SizeBerg-${VERSION}-mac-arm64.zip" ${ENCLOSURE} type="application/octet-stream"/>
+                      </item>
+                    </channel>
+                  </rss>
+                  XML
+                  cat build/appcast.xml
+                  [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' build/SizeBerg.app/Contents/Info.plist)" = "$BUILD_NUMBER" ]
+
+            # Notes: the version's section of CHANGELOG.md ("## <version>" up to the next "## ").
+            - name: Create GitHub release
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  VERSION: ${{ steps.version.outputs.version }}
+                  SIGNED: ${{ steps.signing.outputs.signed }}
+                  GIT_SHA: ${{ github.sha }}
+              run: |
+                  set -euo pipefail
+                  awk -v heading="## ${VERSION}" '
+                      index($0, heading) == 1 { found = 1; next }
+                      found && /^## / { exit }
+                      found { print }
+                  ' CHANGELOG.md > /tmp/release-notes.md
+                  if [ ! -s /tmp/release-notes.md ]; then
+                      echo "Built from commit ${GIT_SHA}." > /tmp/release-notes.md
+                  fi
+                  case "$VERSION" in
+                      *-*) PRERELEASE=true ;;
+                      *) PRERELEASE=false ;;
+                  esac
+                  ZIP="build/SizeBerg-${VERSION}-mac-arm64.zip"
+                  ASSETS=("$ZIP" "${ZIP}.sha256")
+                  if [ "$SIGNED" = true ]; then
+                      ASSETS+=(build/appcast.xml)
+                  fi
+                  # A draft until every file is up: installed apps read appcast.xml from the newest
+                  # published release, and one without it would look like no update.
+                  gh release create "$TAG" "${ASSETS[@]}" \
+                      --verify-tag \
+                      --draft \
+                      --title "SizeBerg ${VERSION}" \
+                      --notes-file /tmp/release-notes.md \
+                      --prerelease="$PRERELEASE"
+                  gh release edit "$TAG" --draft=false
+
+    publish-homebrew:
+        needs: build
+        # ghcommit-action is a Docker action and needs Linux.
+        runs-on: ubuntu-24.04
+        timeout-minutes: 10
+        environment: homebrew-tap
+        permissions:
+            contents: read
+        steps:
+            - name: Checkout cask template
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+              with:
+                  ref: ${{ inputs.tag || github.ref }}
+                  sparse-checkout: homebrew/sizeberg.rb.tmpl
+                  sparse-checkout-cone-mode: false
+
+            # Render to /tmp before the tap checkout, which replaces the workspace.
+            # A signed and notarized build drops the ad-hoc caveat block (xattr / Open Anyway);
+            # an ad-hoc build keeps its text and loses only the markers.
+            - name: Render Homebrew cask
+              env:
+                  VERSION: ${{ needs.build.outputs.version }}
+                  SHA256: ${{ needs.build.outputs.sha256 }}
+                  SIGNED: ${{ needs.build.outputs.signed }}
+              run: |
+                  set -euo pipefail
+                  [ -n "$VERSION" ] && [ -n "$SHA256" ] || { echo "::error::missing version or sha256 from the build job"; exit 1; }
+                  if [ "$SIGNED" = true ]; then
+                      CAVEAT_EXPR='/ADHOC_CAVEAT_BEGIN/,/ADHOC_CAVEAT_END/d'
+                  else
+                      CAVEAT_EXPR='/ADHOC_CAVEAT_BEGIN/d;/ADHOC_CAVEAT_END/d'
+                  fi
+                  sed \
+                      -e "s/VERSION_PLACEHOLDER/${VERSION}/g" \
+                      -e "s/SHA256_PLACEHOLDER/${SHA256}/g" \
+                      -e "$CAVEAT_EXPR" \
+                      homebrew/sizeberg.rb.tmpl > /tmp/sizeberg.rb
+                  if grep -qE 'PLACEHOLDER|ADHOC_CAVEAT' /tmp/sizeberg.rb; then
+                      echo "::error::placeholder or caveat marker left in the rendered cask"
+                      exit 1
+                  fi
+                  cat /tmp/sizeberg.rb
+
+            - name: Generate Homebrew tap token
+              id: app-token
+              uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+              with:
+                  client-id: ${{ secrets.GH_APP_HOMEBREW_TAP_RELEASER_APP_ID }}
+                  private-key: ${{ secrets.GH_APP_HOMEBREW_TAP_RELEASER_PRIVATE_KEY }}
+                  owner: PostHog
+                  repositories: homebrew-tap
+
+            - name: Checkout Homebrew tap
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+              with:
+                  repository: PostHog/homebrew-tap
+                  token: ${{ steps.app-token.outputs.token }}
+
+            # Staged so ghcommit-action sees the file itself; an untracked new
+            # Casks/ folder would show up in git status as the folder only.
+            - name: Stage rendered cask
+              run: |
+                  mkdir -p Casks
+                  cp /tmp/sizeberg.rb Casks/sizeberg.rb
+                  git add Casks/sizeberg.rb
+
+            - name: Commit Homebrew cask update
+              uses: planetscale/ghcommit-action@25309d8005ac7c3bcd61d3fe19b69e0fe47dbdde # v0.2.20
+              with:
+                  commit_message: 'chore: update sizeberg cask to ${{ needs.build.outputs.version }}'
+                  repo: PostHog/homebrew-tap
+                  branch: main
+              env:
+                  GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}

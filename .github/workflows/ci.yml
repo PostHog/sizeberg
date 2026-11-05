@@ -1,0 +1,41 @@
+# Tests and an app build on every PR and on main. macOS only: the scanner reads APFS clone ids
+# and FSEvents, and the app is SwiftUI.
+
+name: CI
+
+on:
+    pull_request:
+    push:
+        branches:
+            - main
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+    contents: read
+
+jobs:
+    check:
+        # macOS 26 with Xcode 26: Swift 6.2 and the macOS 26 SDK the app builds against.
+        runs-on: macos-26
+        timeout-minutes: 20
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+              with:
+                  # build.sh numbers builds by commit count.
+                  fetch-depth: 0
+
+            - name: Test
+              run: swift test
+
+            - name: Build the app
+              run: ./build.sh
+
+            - name: Verify the app bundle
+              run: |
+                  set -euo pipefail
+                  codesign --verify --deep --strict build/SizeBerg.app
+                  build/SizeBerg.app/Contents/Helpers/sizeberg --help

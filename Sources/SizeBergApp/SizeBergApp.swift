@@ -7,13 +7,17 @@ struct SizeBergApp: App {
     @State private var model = ScanModel()
 
     var body: some Scene {
-        WindowGroup("SizeBerg") {
+        // One window: every view shows the same scan, so a second window would only repeat it.
+        Window("SizeBerg", id: "main") {
             ContentView()
                 .environment(model)
                 .frame(minWidth: 1000, minHeight: 640)
         }
         .defaultSize(width: 1480, height: 900)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { Updates.shared.checkForUpdates() }
+            }
             CommandGroup(after: .newItem) {
                 Button("Scan Again") { model.scan() }
                     .keyboardShortcut("r")
@@ -64,6 +68,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.activate(ignoringOtherApps: true)
+        // Starts the daily update check of Developer ID builds.
+        _ = Updates.shared
         if let path = ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT"] {
             let delay = ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT_DELAY"].flatMap(Double.init) ?? 3
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {

@@ -4,12 +4,23 @@ Shows what deleting worktrees, dependencies, build output and caches really free
 
 On APFS, pnpm and uv install packages as copy-on-write clones. `du`, Finder and most cleaners count every clone at full size, so a worktree's `node_modules` looks like gigabytes but frees almost nothing. The real bytes sit in the shared stores, in build output, and in folders nobody uses any more. Like an iceberg, most of what you see is not what you get.
 
+## Install
+
+```sh
+brew install --cask posthog/tap/sizeberg
+```
+
+That installs `SizeBerg.app` and the `sizeberg` command. It needs macOS 26 or later on Apple silicon.
+
+- **Updates**: releases signed with PostHog's Developer ID update themselves through [Sparkle](https://sparkle-project.org): SizeBerg checks once a day, and SizeBerg › Check for Updates… checks now. Builds that are not signed that way, such as local ones, update with `brew upgrade --cask sizeberg`.
+- **Uninstall**: `brew uninstall --zap sizeberg` removes the app, the command, the scan cache in `~/Library/Caches/sizeberg` and the settings. Without Homebrew, delete the app and those folders by hand; the cask's `zap` list in `homebrew/sizeberg.rb.tmpl` names each path.
+
 ## Build and run
 
 ```sh
-./build.sh                     # macOS 26 or later; needs the command line tools, not Xcode
+./build.sh                     # macOS 26 or later; the command line tools are enough, Xcode works too
 open build/SizeBerg.app        # SwiftUI window with table, treemap and cleanup plan
-build/sizeberg                 # text summary
+build/sizeberg                 # text summary (the same CLI is in SizeBerg.app/Contents/Helpers)
 build/sizeberg --plan          # cleanup commands for stale worktrees and stores (runs nothing)
 build/sizeberg --json          # full report
 build/sizeberg --clear-cache   # forget earlier scans; the app has Clear Cache (⌥⌘R)
@@ -18,7 +29,11 @@ SDKROOT=$(xcode-select -p)/SDKs/MacOSX26.sdk swift test   # accounting, scoring 
 
 Both write the last scan to `~/Library/Caches/sizeberg/last-scan.json`, and the app opens on it.
 
-The app is a plain SwiftUI split view: filters in the sidebar, the list or the map in the middle, the selected item in the inspector, and the cleanup plan on a Liquid Glass bar at the bottom. It builds against the macOS 26 SDK because the macOS 27 SDK makes `@State` a macro whose plugin ships only with Xcode 27. macOS 27 restyles the glass at run time either way.
+The app is a plain SwiftUI split view: filters in the sidebar, the list or the map in the middle, the selected item in the inspector, and the cleanup plan in a bar under the list. Worktree rows show their git state in front of the branch: local work, merged, or remote branch gone. With the command line tools it builds against their macOS 26 SDK, because the macOS 27 SDK makes `@State` a macro whose plugin ships only with Xcode. macOS 27 restyles the glass at run time either way.
+
+The app is about 3.5 MB, the download about 1.8 MB. While a rescan runs it uses up to about 600 MB of memory for the cached file entries, then drops back to about 130 MB.
+
+See [RELEASING.md](RELEASING.md) for how releases are built, signed and published.
 
 ## What it scans
 
@@ -28,15 +43,17 @@ The app is a plain SwiftUI split view: filters in the sidebar, the list or the m
 
 Inside each folder, files land in buckets: dependencies (`node_modules`, venvs), build output (`target`, `dist`, `.mypy_cache`, ...), caches, git data, and the rest.
 
+"Build output and caches" is one item in the list for the build output and in-repo caches of every checkout, worktree and folder that stays. Deleting it leaves the items, their source and their dependencies; the next build puts the folders back. Folders that hold files git tracks stay, and so do folders under 1 MB: a Python tree has one small `__pycache__` per package, thousands of deletes for little space.
+
 ## Speed
 
 Measured on an M-series MacBook with 18 million files in the scanned folders.
 
 - **First scan**: 80 to 90 seconds when macOS still has much of the file metadata in memory, up to about 3 minutes after a restart. Reading that much metadata is the floor: even a catalog scan of the whole volume with `searchfs` takes about 2 minutes.
 - **Useful numbers early**: caches, build output, git data and source are read first, dependency trees last. Dependency trees hold half the files but little of what deleting frees. While the scan runs, each item shows "at least" what is certain so far. Once its last folder is read it says Final: the clone copy count tells whether every copy is inside the item, so its number is exact without waiting for the rest. On the test machine, 77% of the final total showed after 25 seconds and 95% after 37 seconds of an 80 second scan.
-- **Rescans**: about 3 seconds. They ask the FSEvents history which folders changed since the last scan and walk only those. Each top-level folder of a worktree or cache is cached on its own, so an edit in `frontend/src` re-walks `frontend`, not `node_modules`.
+- **Rescans**: about 3 to 6 seconds. They ask the FSEvents history which folders changed since the last scan and walk only those. Each top-level folder of a worktree or cache is cached on its own, so an edit in `frontend/src` re-walks `frontend`, not `node_modules`.
 - **Progress**: rescans and full scans show a share and time left, from the last scan's file counts. A first scan shows folders done and time spent. A full scan shows the live table with the last scan's numbers as dashed bars.
-- The cache lives in `~/Library/Caches/sizeberg/groups` (about 250 MB for 18 million files). `--full`, or Full Scan in the app, ignores it.
+- The cache lives in `~/Library/Caches/sizeberg/groups` (about 250 MB for 18 million files). `--full`, or Full Scan in the app, ignores it. A worktree that did not change since the last scan keeps its `git status` answer, so rescans do not read big worktrees again.
 - The scan turns off access time updates for its own reads, so reading folders writes no metadata.
 
 ## How the numbers work
