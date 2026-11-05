@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3
+
+- Finds your code wherever it lives. Scans looked only in `~/workspace`; now SizeBerg walks your home folder for the first folders that hold git repositories, like `~/code` or `~/Documents/GitHub`, and repositories right in your home folder, like `~/dotfiles`. It skips `~/Library`, hidden folders, media and dependency trees, and the walk adds about a second to a scan. `sizeberg --root` still scans given folders instead.
+
 ## 0.1.2
 
 - Squash-merged branches count as merged. The merge queue rewrites a pull request's commits into one, so git called them unmerged and unpushed, and those worktrees stayed "stale, local work". SizeBerg now finds the squash commit offline by comparing patch ids, and asks GitHub through `gh`, when it is installed and logged in, for a merged pull request that contains the worktree's HEAD. Clean Up checks the same again right before it deletes, so a commit made after the merge still keeps the worktree.
