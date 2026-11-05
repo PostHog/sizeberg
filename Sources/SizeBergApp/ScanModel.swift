@@ -263,6 +263,22 @@ final class ScanModel {
             trimBytes: Self.expectedBytes(of: plan.steps.filter(\.isTrim), in: report),
             keptWithLocalWork: report.groups.filter { $0.git?.status == .staleWithLocalWork && !selection.contains($0.id) }.count
         )
+        lookUpIgnoredFiles(for: plan.steps, in: report)
+    }
+
+    /// Files git ignores go with a deleted worktree without a word, so the sheet names the ones that
+    /// would be lost. Looked up after the sheet opens: git takes a moment per worktree.
+    private func lookUpIgnoredFiles(for steps: [CleanupStep], in report: Report) {
+        for step in steps where step.kind == .worktree && !step.isTrim && step.groupIDs.count == 1 {
+            let mainCheckout = report.group(step.groupIDs[0])?.git?.repoPath
+            Task {
+                let lost = await Task.detached(priority: .userInitiated) {
+                    IgnoredFiles.lost(in: step.path, mainCheckout: mainCheckout)
+                }.value
+                guard let index = cleanup?.items.firstIndex(where: { $0.id == step.id }) else { return }
+                cleanup?.items[index].ignoredFiles = lost ?? []
+            }
+        }
     }
 
     func selectBuildOutput() {
@@ -339,6 +355,8 @@ struct CleanupSession {
     struct Item: Identifiable {
         var step: CleanupStep
         var status: Status = .waiting
+        /// Files git ignores that deleting this worktree also deletes. Nil until looked up.
+        var ignoredFiles: [IgnoredFile]?
 
         var id: String { step.id }
 

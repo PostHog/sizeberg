@@ -168,6 +168,14 @@ private struct StepRow: View {
                         .foregroundStyle(messageColor)
                         .lineLimit(3)
                 }
+                if let ignored = item.ignoredFiles, !ignored.isEmpty, item.status == .waiting {
+                    // A secret-looking file in orange: it may exist nowhere else.
+                    Text(Self.ignoredText(ignored))
+                        .font(.caption)
+                        .foregroundStyle(ignored.contains(where: \.looksSecret) ? AnyShapeStyle(GroupReport.localWorkColor) : AnyShapeStyle(.secondary))
+                        .lineLimit(2)
+                        .help(ignored.map(\.path).joined(separator: "\n"))
+                }
             }
             Spacer(minLength: 8)
             Text(bytes(item.step.expectedBytes))
@@ -200,6 +208,14 @@ private struct StepRow: View {
     private var commandText: String {
         let step = item.step
         return step.isTrim ? folderSummary(step.folders, names: 4) : step.command
+    }
+
+    /// Like "Also deletes files git ignores: .env, notes.md and 3 more". Secret-looking ones first.
+    static func ignoredText(_ files: [IgnoredFile]) -> String {
+        let ordered = files.filter(\.looksSecret) + files.filter { !$0.looksSecret }
+        let shown = ordered.prefix(3).map(\.path).joined(separator: ", ")
+        let rest = ordered.count - 3
+        return "Also deletes files git ignores: " + shown + (rest > 0 ? " and \(rest) more" : "")
     }
 
     private var title: String {
