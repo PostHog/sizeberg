@@ -2,6 +2,7 @@
 
 ## 0.1.4 (unreleased)
 
+- Runs on macOS 15 Sequoia. Liquid Glass buttons and the toolbar spacer sit behind availability checks, so Sequoia shows the classic look. CI now launches each build on a macOS 15 runner and scans a test repository there.
 - Clean Up skips a worktree or folder that any running process works in, such as a dev server, an editor or a terminal tab, and names it. Before, only Claude Code and Codex agents kept a worktree.
 - The cleanup sheet names files git ignores that deleting a worktree would lose, such as `.env.local` or notes, with secret-looking ones in orange. `git worktree remove` deletes those without asking. Rebuildable tool output and files identical to the main checkout's copy are left out.
 - The shared Go caches that hogli moved to `~/.cache/posthog/go` and `go-build` show up as cache items.

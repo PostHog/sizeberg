@@ -10,7 +10,7 @@ On APFS, pnpm and uv install packages as copy-on-write clones. `du`, Finder and 
 brew install --cask posthog/tap/sizeberg
 ```
 
-That installs `SizeBerg.app` and the `sizeberg` command. It needs macOS 26 or later on Apple silicon.
+That installs `SizeBerg.app` and the `sizeberg` command. It needs macOS 15 Sequoia or later on Apple silicon.
 
 - **Updates**: releases signed with PostHog's Developer ID update themselves through [Sparkle](https://sparkle-project.org): SizeBerg checks once a day, and SizeBerg › Check for Updates… checks now. Builds that are not signed that way, such as local ones, update with `brew upgrade --cask sizeberg`.
 - **Uninstall**: `brew uninstall --zap sizeberg` removes the app, the command, the scan cache in `~/Library/Caches/sizeberg` and the settings. Without Homebrew, delete the app and those folders by hand; the cask's `zap` list in `homebrew/sizeberg.rb.tmpl` names each path.
@@ -18,7 +18,7 @@ That installs `SizeBerg.app` and the `sizeberg` command. It needs macOS 26 or la
 ## Build and run
 
 ```sh
-./build.sh                     # macOS 26 or later; the command line tools are enough, Xcode works too
+./build.sh                     # builds on macOS 26 or later, runs on 15 or later; the command line tools are enough, Xcode works too
 open build/SizeBerg.app        # SwiftUI window with table, treemap and cleanup plan
 build/sizeberg                 # text summary (the same CLI is in SizeBerg.app/Contents/Helpers)
 build/sizeberg --plan          # cleanup commands for stale worktrees and stores (runs nothing)

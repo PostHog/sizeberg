@@ -235,7 +235,7 @@ jobs:
                         <pubDate>$(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S +0000')</pubDate>
                         <sparkle:version>${BUILD_NUMBER}</sparkle:version>
                         <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
-                        <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+                        <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
                         <sparkle:releaseNotesLink>https://github.com/PostHog/sizeberg/releases/tag/v${VERSION}</sparkle:releaseNotesLink>
                         <enclosure url="https://github.com/PostHog/sizeberg/releases/download/v${VERSION}/SizeBerg-${VERSION}-mac-arm64.zip" ${ENCLOSURE} type="application/octet-stream"/>
                       </item>
