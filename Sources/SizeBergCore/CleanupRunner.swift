@@ -117,6 +117,9 @@ public enum CleanupRunner {
 
     /// git itself refuses uncommitted changes; commits no remote has are checked here.
     private static func worktreeReasonToSkip(_ step: CleanupStep) -> String? {
+        if AgentActivity.isWorking(in: step.path) {
+            return "A coding agent is working here."
+        }
         guard let git = Shell.find("git") else { return "git not found." }
         if GitInspector.hasUncommittedChanges(at: step.path, git: git) {
             return "Has uncommitted changes now."

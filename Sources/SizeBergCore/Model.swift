@@ -132,6 +132,8 @@ public struct GroupReport: Codable, Identifiable, Sendable {
     public var selectable: Bool
     public var cleanupCommand: String?
     public var note: String?
+    /// Set for checkouts and worktrees a coding agent worked in. Nil when none did, or in older reports.
+    public var agent: AgentState? = nil
 
     public var path: String { paths.first ?? "" }
 }

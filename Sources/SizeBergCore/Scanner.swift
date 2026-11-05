@@ -654,6 +654,13 @@ private struct ReportBuilder {
             ))
         }
 
+        // One pass over the agents' transcripts and the process table for every checkout.
+        let checkouts = groups.filter { $0.kind == .mainCheckout || $0.kind == .worktree }.map(\.path)
+        let agents = AgentActivity().states(of: checkouts)
+        for index in groups.indices where groups[index].kind == .mainCheckout || groups[index].kind == .worktree {
+            groups[index].agent = agents[groups[index].path]
+        }
+
         let sharedSets = totals.sets
             .filter { $0.key.count > 1 }
             .map { set, value in

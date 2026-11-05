@@ -39,6 +39,9 @@ extension GroupReport {
         case .worktree, .project:
             break
         }
+        if agent?.isWorking == true {
+            return score(confidence: 0, reason: "agent working", hasLocalWork: false)
+        }
         guard let git else {
             return score(confidence: Self.folderFactor * Self.cacheConfidence, reason: "folder", hasLocalWork: false)
         }

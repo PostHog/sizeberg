@@ -174,12 +174,38 @@ enum BranchState {
     }
 }
 
+/// A coding agent in a checkout: working now, or how long ago it last worked. Older than a few days says nothing.
+struct AgentBadge: View {
+    static let recentDays: Double = 3
+
+    let agent: AgentState?
+
+    var body: some View {
+        if let agent, let text = Self.help(agent) {
+            Image(systemName: "sparkles")
+                .foregroundStyle(agent.isWorking ? AnyShapeStyle(Color.adaptive(light: Color(red: 0.0, green: 0.55, blue: 0.45), dark: .mint)) : AnyShapeStyle(.tertiary))
+                .imageScale(.medium)
+                .help(text)
+                .accessibilityLabel(text)
+        }
+    }
+
+    static func help(_ agent: AgentState) -> String? {
+        if agent.isWorking {
+            return "A coding agent is working here"
+        }
+        guard let last = agent.lastActive, Date().timeIntervalSince(last) < recentDays * 86_400 else { return nil }
+        return "A coding agent worked here \(last.formatted(.relative(presentation: .named)))"
+    }
+}
+
 /// A worktree's branch with its git state in front, like a merged branch with a purple merge icon.
 struct BranchLabel: View {
     let group: GroupReport
 
     var body: some View {
         HStack(spacing: 4) {
+            AgentBadge(agent: group.agent)
             if group.kind == .worktree {
                 ForEach(Array(BranchState.states(of: group.git).enumerated()), id: \.offset) { _, state in
                     Image(systemName: state.symbol)

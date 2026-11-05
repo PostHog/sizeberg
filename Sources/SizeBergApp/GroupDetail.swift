@@ -254,6 +254,15 @@ struct GroupDetail: View {
         if let lastActive = git.lastActive {
             LabeledContent("Last active", value: lastActive.formatted(date: .abbreviated, time: .shortened))
         }
+        if let agent = group.agent {
+            LabeledContent("Coding agent") {
+                if agent.isWorking {
+                    Text("Working now").foregroundStyle(GroupReport.localWorkColor)
+                } else if let last = agent.lastActive {
+                    Text(last.formatted(.relative(presentation: .named)))
+                }
+            }
+        }
         if group.kind == .worktree {
             LabeledContent("Merged into default") { yesNo(git.mergedIntoDefault) }
             LabeledContent("Remote branch gone") { yesNo(git.upstreamGone) }

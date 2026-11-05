@@ -237,7 +237,7 @@ extension GroupReport {
 
     /// What "Select Stale" picks: stale worktrees without local work, and worktrees whose folder is gone.
     public var goesWithStale: Bool {
-        git?.status == .stale || git?.status == .missing
+        (git?.status == .stale || git?.status == .missing) && agent?.isWorking != true
     }
 
     /// Quiet worktree without local work: safe to propose for deletion.
