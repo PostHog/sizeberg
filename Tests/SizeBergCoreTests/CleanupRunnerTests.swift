@@ -122,4 +122,49 @@ struct CleanupRunnerTests {
         #expect(plan.steps.last?.folders == ["/repo/tree-1/dist"])
         #expect(report.freeableBytes(selection: selection) == 1_300)
     }
+
+    /// Flox keeps its Python venv inside .flox/cache. Deleting the cache must leave the venv.
+    @Test func cacheFolderKeepsTheVenvInsideIt() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("sizeberg-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = root.appendingPathComponent(".flox/cache")
+        for folder in ["venv/lib", "go-build"] {
+            try FileManager.default.createDirectory(at: cache.appendingPathComponent(folder), withIntermediateDirectories: true)
+        }
+        try Data("{}".utf8).write(to: cache.appendingPathComponent("upgrade-checks.json"))
+
+        let folders = TrimFolder.excludingDependencies([
+            TrimFolder(path: cache.path, kind: .caches),
+            TrimFolder(path: cache.appendingPathComponent("venv").path, kind: .dependencies),
+        ])
+
+        #expect(folders.map(\.path) == ["go-build", "upgrade-checks.json"].map { cache.appendingPathComponent($0).path })
+        #expect(folders.allSatisfy { $0.kind == .caches })
+    }
+
+    /// A big checkout has more build folders than one process takes as arguments, and Go's module
+    /// cache is read-only. Both must still go, without crashing the app.
+    @Test func trimRemovesThousandsOfFoldersAndReadOnlyOnes() throws {
+        let (root, repo, _) = try Self.repoWithWorktree()
+        defer {
+            _ = Shell.run("/bin/chmod", ["-R", "u+w", root.path])
+            try? FileManager.default.removeItem(at: root)
+        }
+        let folders = (0..<4_100).map { repo.appendingPathComponent("pkg\($0)/__pycache__") }
+        for folder in folders {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        let module = repo.appendingPathComponent(".flox/cache/go/pkg/mod/example@v1")
+        try FileManager.default.createDirectory(at: module, withIntermediateDirectories: true)
+        try Data("package example\n".utf8).write(to: module.appendingPathComponent("a.go"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: module.path)
+        let paths = folders.map(\.path) + [repo.appendingPathComponent(".flox/cache/go").path]
+        let step = CleanupStep(
+            groupIDs: [0], name: "repo", kind: .mainCheckout, path: repo.path,
+            command: CleanupRunner.trimCommand(paths), expectedBytes: 0, isTrim: true, folders: paths
+        )
+
+        #expect(CleanupRunner.run(step) == .done)
+        #expect(paths.allSatisfy { !FileManager.default.fileExists(atPath: $0) })
+    }
 }

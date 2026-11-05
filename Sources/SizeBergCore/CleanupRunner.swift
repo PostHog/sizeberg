@@ -133,28 +133,62 @@ public enum CleanupRunner {
     static func foldersSafeToTrim(_ step: CleanupStep) -> [String] {
         let existing = step.folders.filter { FileManager.default.fileExists(atPath: $0) }
         guard step.kind == .worktree || step.kind == .mainCheckout, !existing.isEmpty else { return existing }
-        guard let git = Shell.find("git") else { return [] }
-        let result = Shell.run(git, ["-C", step.path, "ls-files", "--full-name", "-z", "--"] + existing, timeout: 60)
-        // Without an answer from git, nothing counts as safe.
-        guard result.status == 0, !result.timedOut else { return [] }
-        let root = Shell.run(git, ["-C", step.path, "rev-parse", "--show-toplevel"], timeout: 10)
-            .output.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !root.isEmpty else { return [] }
-        let tracked = result.output.split(separator: "\0").map { realPath(root + "/" + $0) }
-        return existing.filter { folder in
-            let prefix = realPath(folder) + "/"
-            return !tracked.contains { $0.hasPrefix(prefix) }
-        }
+        guard let tracked = trackedFolders(in: step.path) else { return [] }
+        return existing.filter { !tracked.contains(realPath($0)) }
     }
+
+    /// Every folder that holds a file git tracks, as real paths. Nil when git does not answer.
+    /// One listing of the whole checkout: passing thousands of folders to git runs into the
+    /// limit of 4,096 arguments per process.
+    private static func trackedFolders(in checkout: String) -> Set<String>? {
+        guard let git = Shell.find("git") else { return nil }
+        let root = Shell.run(git, ["-C", checkout, "rev-parse", "--show-toplevel"], timeout: 10)
+        let files = Shell.run(git, ["-C", checkout, "ls-files", "--full-name", "-z"], timeout: 60)
+        guard root.status == 0, files.status == 0, !files.timedOut else { return nil }
+        let top = realPath(root.output.trimmingCharacters(in: .whitespacesAndNewlines))
+        var folders = Set<String>()
+        for file in files.output.split(separator: "\0") {
+            var folder = top
+            for component in file.split(separator: "/").dropLast() {
+                folder += "/" + component
+                folders.insert(folder)
+            }
+        }
+        return folders
+    }
+
+    /// Deletes with rm directly, a batch at a time, to stay under the argument limits.
+    /// Go marks its module cache read-only, so a failed batch is made writable and tried once more.
+    private static func remove(_ folders: [String]) -> CleanupOutcome {
+        let batches = stride(from: 0, to: folders.count, by: removeBatchSize).map {
+            Array(folders[$0..<min($0 + removeBatchSize, folders.count)])
+        }
+        for batch in batches {
+            var result = Shell.run("/bin/rm", ["-rf"] + batch, timeout: 30 * 60, mergeErrors: true)
+            if result.status != 0 {
+                let left = batch.filter { FileManager.default.fileExists(atPath: $0) }
+                _ = Shell.run("/bin/chmod", ["-R", "u+w"] + left, timeout: 30 * 60, mergeErrors: true)
+                result = Shell.run("/bin/rm", ["-rf"] + left, timeout: 30 * 60, mergeErrors: true)
+            }
+            if result.timedOut {
+                return .failed("Stopped after 30 minutes.")
+            }
+            guard result.status == 0 else {
+                let lastLines = result.output.split(separator: "\n").suffix(3).joined(separator: "\n")
+                return .failed(lastLines.isEmpty ? "rm exited with status \(result.status)." : lastLines)
+            }
+        }
+        return .done
+    }
+
+    static let removeBatchSize = 1_000
 
     private static func runTrim(_ step: CleanupStep) -> CleanupOutcome {
         let folders = foldersSafeToTrim(step)
         guard !folders.isEmpty else {
             return .skipped("The folders are gone, hold files git tracks, or git did not answer.")
         }
-        var trimmed = step
-        trimmed.command = trimCommand(folders)
-        let outcome = runCommand(trimmed)
+        let outcome = remove(folders)
         let kept = step.folders.count - folders.count
         guard outcome == .done, kept > 0 else { return outcome }
         return .partlyDone("Kept \(kept) of \(step.folders.count) folders: they are gone or hold files git tracks.")

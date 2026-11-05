@@ -23,7 +23,7 @@ struct ScanCache {
     }
 
     /// Bump when the meaning of cached data changes.
-    static let formatVersion = 5
+    static let formatVersion = 6
 
     let directory: URL
 

@@ -532,7 +532,8 @@ private struct ReportBuilder {
                 continue
             }
             var buckets: [BucketReport] = []
-            let folders = Dictionary(grouping: scans[index]?.trimFolders ?? [], by: \.kind).mapValues { $0.map(\.path) }
+            let trimFolders = TrimFolder.excludingDependencies(scans[index]?.trimFolders ?? [])
+            let folders = Dictionary(grouping: trimFolders, by: \.kind).mapValues { $0.map(\.path) }
             for kind in BucketKind.allCases {
                 let bucket = index * kindsPerGroup + kind.rawValue
                 guard totals.apparentBytes[bucket] > 0 || totals.fileCounts[bucket] > 0 else { continue }

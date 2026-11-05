@@ -160,6 +160,38 @@ struct TrimFolder: Codable, Sendable {
     static func starts(_ kind: BucketKind, below parent: BucketKind) -> Bool {
         kind != parent && kind.isTrimmable
     }
+
+    /// True for a dependency folder inside a cache, such as the Python venv in .flox/cache.
+    /// It is recorded so the cache around it can be deleted without it.
+    static func isKeptInsideCache(_ kind: BucketKind, below parent: BucketKind) -> Bool {
+        kind == .dependencies && parent == .caches
+    }
+
+    /// Replaces each cache folder that holds a kept dependency folder by the entries around it, so
+    /// deleting caches never takes a venv or node_modules with it. Reads those few folders from disk.
+    static func excludingDependencies(_ folders: [TrimFolder]) -> [TrimFolder] {
+        let kept = folders.filter { $0.kind == .dependencies }.map(\.path)
+        let trimmable = folders.filter { $0.kind != .dependencies }
+        guard !kept.isEmpty else { return trimmable }
+        return trimmable.flatMap { folder -> [TrimFolder] in
+            guard kept.contains(where: { $0.hasPrefix(folder.path + "/") }) else { return [folder] }
+            return entries(of: folder.path, around: kept).map { TrimFolder(path: $0, kind: folder.kind) }
+        }
+    }
+
+    private static func entries(of path: String, around kept: [String]) -> [String] {
+        let names = ((try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []).sorted()
+        return names.flatMap { name -> [String] in
+            let child = path + "/" + name
+            if kept.contains(child) {
+                return []
+            }
+            if kept.contains(where: { $0.hasPrefix(child + "/") }) {
+                return entries(of: child, around: kept)
+            }
+            return [child]
+        }
+    }
 }
 
 struct GroupScan {
@@ -431,7 +463,7 @@ final class WalkWorker {
             let childKind = settings.classify
                 ? Classifier.kind(forDirectory: name, parent: kind, path: childPath)
                 : settings.defaultKind
-            if TrimFolder.starts(childKind, below: kind) {
+            if TrimFolder.starts(childKind, below: kind) || TrimFolder.isKeptInsideCache(childKind, below: kind) {
                 scan.trimFolders.append(TrimFolder(path: childPath, kind: childKind))
             }
             let child = WalkUnit(path: childPath, group: unit.group, segment: unit.segment, kind: childKind, filesOnly: false)
