@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.1 (unreleased)
+## 0.1.1
 
 - The list stays current: SizeBerg rescans when it opens and when you come back to it after a few minutes, instead of showing the last scan until you press ⌘R.
 - Items a cleanup deleted leave the list at once. The rescan after a big delete can take a minute, because every shared file the deleted items held is counted again.
