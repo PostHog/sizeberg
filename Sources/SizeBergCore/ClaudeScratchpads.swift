@@ -43,7 +43,7 @@ struct ClaudeScratchpads {
                     result.activeCount += 1
                     continue
                 }
-                if !Self.holdsGitData(folder) {
+                if !holdsGitData(folder) {
                     result.idle.append(folder)
                 }
             }
@@ -64,7 +64,7 @@ struct ClaudeScratchpads {
             if !isIdle(folder) {
                 return "Session \(name) was active again since the scan."
             }
-            if Self.holdsGitData(folder) {
+            if holdsGitData(folder) {
                 return "Session \(name) holds a git repository now."
             }
             if let process = AgentActivity.process(workingIn: folder) {
@@ -82,21 +82,6 @@ struct ClaudeScratchpads {
         let touched = [transcript + ".jsonl", transcript, folder, folder + "/scratchpad"].compactMap(Self.modified)
         guard let last = touched.max() else { return true }
         return now.timeIntervalSince(last) >= Self.idleTime
-    }
-
-    /// A `.git` folder or file anywhere inside: a clone, a worktree or a submodule.
-    private static func holdsGitData(_ folder: String) -> Bool {
-        guard let entries = FileManager.default.enumerator(atPath: folder) else { return true }
-        while let entry = entries.nextObject() as? String {
-            let name = (entry as NSString).lastPathComponent
-            if name == ".git" {
-                return true
-            }
-            if name == "node_modules" {
-                entries.skipDescendants()
-            }
-        }
-        return false
     }
 
     /// A real folder, not a symbolic link, owned by this user.

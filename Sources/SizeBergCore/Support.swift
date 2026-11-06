@@ -102,3 +102,20 @@ public func displayPath(_ path: String) -> String {
     guard path.hasPrefix(home) else { return path }
     return "~" + path.dropFirst(home.count)
 }
+
+/// A `.git` folder or file anywhere inside: a clone, a worktree or a submodule. rm -rf on such a
+/// folder would skip the checks for uncommitted and unpushed work that git items get.
+/// node_modules is skipped: packages there carry their own .git only when they are git dependencies.
+func holdsGitData(_ folder: String) -> Bool {
+    guard let entries = FileManager.default.enumerator(atPath: folder) else { return true }
+    while let entry = entries.nextObject() as? String {
+        let name = (entry as NSString).lastPathComponent
+        if name == ".git" {
+            return true
+        }
+        if name == "node_modules" {
+            entries.skipDescendants()
+        }
+    }
+    return false
+}
