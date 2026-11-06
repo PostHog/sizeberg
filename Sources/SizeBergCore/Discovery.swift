@@ -34,10 +34,15 @@ struct Discovery {
     var scratchpads = ClaudeScratchpads()
 
     func discover() -> [GroupSpec] {
-        let rootChildren = roots.flatMap { directories(in: realPath($0)) }
+        let childrenByRoot = roots.map { (root: realPath($0), children: directories(in: realPath($0))) }
+        let rootChildren = childrenByRoot.flatMap(\.children)
         var specs = repositorySpecs(rootChildren + repositories.map(realPath))
         let claimed = Set(specs.flatMap(\.paths))
-        let projects = rootChildren.filter { !claimed.contains($0) }.map(projectSpec)
+        let projects = childrenByRoot.flatMap { root, children in
+            let folders = children.filter { !claimed.contains($0) }
+            let offersDelete = offersFolderDelete(root: root, repositories: children.count - folders.count, folders: folders.count)
+            return folders.map { projectSpec($0, offersDelete: offersDelete, root: root) }
+        }
         let worktrees = specs.filter { $0.gitSeed != nil }.flatMap(\.paths)
         let fixed = cacheSpecs() + scratchpadSpecs(keeping: worktrees) + systemSpecs()
         let projectRoom = GroupSet.maxGroups - specs.count - fixed.count - 1
@@ -107,16 +112,31 @@ struct Discovery {
         return spec
     }
 
-    private func projectSpec(_ path: String) -> GroupSpec {
-        GroupSpec(
+    /// Folders a code folder holds next to its repositories are usually leftovers when there are
+    /// few of them among many repositories, like an old copy in ~/workspace. Where there are many,
+    /// or only a few repositories, they are more likely someone's own projects without git, so
+    /// they are listed but never offered for deletion. Neither are folders in Documents, Desktop or
+    /// Downloads, which hold everything else a person keeps.
+    static let minRepositoriesForFolderDelete = 5
+    static let maxFolderShareForFolderDelete = 0.25
+
+    private func offersFolderDelete(root: String, repositories: Int, folders: Int) -> Bool {
+        let personal = ["Documents", "Desktop", "Downloads"].map { realPath(home + "/" + $0) }
+        guard !personal.contains(root), repositories >= Self.minRepositoriesForFolderDelete else { return false }
+        return Double(folders) / Double(repositories + folders) <= Self.maxFolderShareForFolderDelete
+    }
+
+    private func projectSpec(_ path: String, offersDelete: Bool, root: String) -> GroupSpec {
+        let rootName = (root as NSString).abbreviatingWithTildeInPath
+        return GroupSpec(
             kind: .project,
             name: (path as NSString).lastPathComponent,
             paths: [path],
             classify: true,
             defaultKind: .source,
             gitSeed: nil,
-            cleanupCommand: "rm -rf \(shellQuote(path))",
-            note: nil
+            cleanupCommand: offersDelete ? "rm -rf \(shellQuote(path))" : nil,
+            note: offersDelete ? nil : "Not offered for deletion: folders next to the repositories in \(rootName) are likely your own projects. Build output and caches inside can still go with Build Output."
         )
     }
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.6 (unreleased)
+
+- Folders next to your repositories are offered for deletion only where they look like leftovers: in a code folder with at least 5 repositories, where plain folders are at most a quarter of what it holds. Elsewhere, such as a few repositories with your own projects beside them, or anything in Documents, Desktop or Downloads, they are listed with their size but not offered. Build output and caches inside them can still go with Build Output.
+
 ## 0.1.5
 
 - A squash-merge match must also merge into the squash commit without changing it. Patch ids leave out where a change sits, so an edit moved to another block could still count as merged.

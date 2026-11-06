@@ -27,10 +27,12 @@ extension GroupReport {
     /// A folder outside git has no merge state to go on.
     static let folderFactor = 0.5
 
-    /// Nil for main checkouts and container disks: the scan never proposes deleting them.
+    /// Nil for main checkouts, container disks and folders not offered for deletion: the scan never proposes deleting them.
     public func cleanupScore(now: Date = Date()) -> CleanupScore? {
         switch kind {
         case .mainCheckout, .system:
+            return nil
+        case .project where cleanupCommand == nil:
             return nil
         case .cache:
             return score(confidence: Self.cacheConfidence, reason: "refills when used", hasLocalWork: false)
