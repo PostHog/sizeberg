@@ -117,8 +117,8 @@ public enum CleanupRunner {
         if let reason = processReasonToSkip(step) {
             return reason
         }
-        if FileManager.default.fileExists(atPath: step.path + "/.git") {
-            return "Is a git repository now."
+        if holdsGitData(step.path) {
+            return "Holds a git repository or worktree, which rm -rf would delete without its checks."
         }
         guard let eventID = ScanCache().loadState()?.eventID,
               let changes = ChangeLog.changes(since: eventID, under: [step.path]) else {

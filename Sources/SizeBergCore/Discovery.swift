@@ -38,12 +38,16 @@ struct Discovery {
         let rootChildren = childrenByRoot.flatMap(\.children)
         var specs = repositorySpecs(rootChildren + repositories.map(realPath))
         let claimed = Set(specs.flatMap(\.paths))
+        let worktrees = specs.filter { $0.gitSeed != nil }.flatMap(\.paths)
         let projects = childrenByRoot.flatMap { root, children in
             let folders = children.filter { !claimed.contains($0) }
             let offersDelete = offersFolderDelete(root: root, repositories: children.count - folders.count, folders: folders.count)
-            return folders.map { projectSpec($0, offersDelete: offersDelete, root: root) }
+            return folders.map { folder in
+                // Worktrees placed in a plain folder are items of their own, with checks for local work.
+                let holdsGit = offersDelete && (worktrees.contains { $0.hasPrefix(folder + "/") } || holdsGitData(folder))
+                return projectSpec(folder, offersDelete: offersDelete && !holdsGit, holdsGit: holdsGit, root: root)
+            }
         }
-        let worktrees = specs.filter { $0.gitSeed != nil }.flatMap(\.paths)
         let fixed = cacheSpecs() + scratchpadSpecs(keeping: worktrees) + systemSpecs()
         let projectRoom = GroupSet.maxGroups - specs.count - fixed.count - 1
         specs += lumpOverflow(projects, room: projectRoom)
@@ -126,8 +130,11 @@ struct Discovery {
         return Double(folders) / Double(repositories + folders) <= Self.maxFolderShareForFolderDelete
     }
 
-    private func projectSpec(_ path: String, offersDelete: Bool, root: String) -> GroupSpec {
+    private func projectSpec(_ path: String, offersDelete: Bool, holdsGit: Bool, root: String) -> GroupSpec {
         let rootName = (root as NSString).abbreviatingWithTildeInPath
+        let note = holdsGit
+            ? "Not offered for deletion: it holds git repositories or worktrees, which are items of their own with checks for local work."
+            : "Not offered for deletion: folders next to the repositories in \(rootName) are likely your own projects. Build output and caches inside can still go with Build Output."
         return GroupSpec(
             kind: .project,
             name: (path as NSString).lastPathComponent,
@@ -136,7 +143,7 @@ struct Discovery {
             defaultKind: .source,
             gitSeed: nil,
             cleanupCommand: offersDelete ? "rm -rf \(shellQuote(path))" : nil,
-            note: offersDelete ? nil : "Not offered for deletion: folders next to the repositories in \(rootName) are likely your own projects. Build output and caches inside can still go with Build Output."
+            note: offersDelete ? nil : note
         )
     }
 

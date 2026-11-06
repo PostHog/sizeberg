@@ -3,6 +3,7 @@
 ## 0.1.6 (unreleased)
 
 - Folders next to your repositories are offered for deletion only where they look like leftovers: in a code folder with at least 5 repositories, where plain folders are at most a quarter of what it holds. Elsewhere, such as a few repositories with your own projects beside them, or anything in Documents, Desktop or Downloads, they are listed with their size but not offered. Build output and caches inside them can still go with Build Output.
+- A plain folder that holds git repositories or worktrees, such as a folder you keep worktrees in, is never offered for deletion, and Delete checks for git data at any depth first. Before, `rm -rf` on such a folder would have deleted those worktrees without the checks for uncommitted and unpushed work.
 
 ## 0.1.5
 
