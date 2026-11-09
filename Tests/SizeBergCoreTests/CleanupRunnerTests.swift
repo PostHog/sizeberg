@@ -54,6 +54,35 @@ struct CleanupRunnerTests {
         #expect(FileManager.default.fileExists(atPath: worktree.appendingPathComponent("draft.txt").path))
     }
 
+    /// Agent tools link node_modules into each worktree. The link is no work to keep, and its target must survive.
+    @Test func worktreeWithOnlyUntrackedLinksIsRemoved() throws {
+        let (root, repo, worktree) = try Self.repoWithWorktree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let shared = root.appendingPathComponent("shared")
+        try FileManager.default.createDirectory(at: shared, withIntermediateDirectories: true)
+        try Data("kept\n".utf8).write(to: shared.appendingPathComponent("package.json"))
+        try FileManager.default.createSymbolicLink(at: worktree.appendingPathComponent("node_modules"), withDestinationURL: shared)
+
+        #expect(CleanupRunner.run(Self.step(repo: repo, worktree: worktree)) == .done)
+        #expect(!FileManager.default.fileExists(atPath: worktree.path))
+        #expect(FileManager.default.fileExists(atPath: shared.appendingPathComponent("package.json").path))
+    }
+
+    /// A plain git status writes refreshed stat info back to the index, and the index mtime is what
+    /// lastActive reads. Checking a quiet worktree for changes must not make it look active.
+    @Test func changeCheckKeepsTheIndexUntouched() throws {
+        let (root, repo, worktree) = try Self.repoWithWorktree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let index = repo.appendingPathComponent(".git/worktrees/worktree/index").path
+        let quiet = Date(timeIntervalSinceNow: -10 * 86_400)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -86_400)], ofItemAtPath: worktree.appendingPathComponent("file.txt").path)
+        try FileManager.default.setAttributes([.modificationDate: quiet], ofItemAtPath: index)
+
+        #expect(!GitInspector.hasUncommittedChanges(at: worktree.path, git: Shell.find("git") ?? "/usr/bin/git"))
+        let after = try FileManager.default.attributesOfItem(atPath: index)[.modificationDate] as? Date
+        #expect(after == quiet)
+    }
+
     /// A trim deletes rebuildable folders from a checkout that stays. A committed dist folder must survive it.
     /// Also when the item is a plain folder that holds the repository, which git cannot be asked about.
     @Test(arguments: [false, true]) func trimKeepsFoldersThatHoldTrackedFiles(fromPlainFolder: Bool) throws {
