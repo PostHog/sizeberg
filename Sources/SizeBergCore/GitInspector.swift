@@ -124,9 +124,30 @@ final class GitInspector: @unchecked Sendable {
     /// A status that fails or times out counts as dirty: never suggest removing work we could not check.
     /// Untracked files are asked for by flag, because `status.showUntrackedFiles=no` would hide them,
     /// and git worktree remove then deletes them without asking.
+    /// Untracked symlinks do not count: deleting a link deletes no data. Agent tools link node_modules
+    /// into each worktree, and an ignore rule like `node_modules/` matches folders only, not links.
     static func hasUncommittedChanges(at path: String, git: String) -> Bool {
-        let status = Shell.run(git, ["-C", path, "status", "--porcelain", "--untracked-files=normal"], timeout: 60)
-        return status.status != 0 || status.timedOut || !status.output.isEmpty
+        guard let entries = statusEntries(at: path, git: git) else { return true }
+        return entries.contains { !isUntrackedLink($0, in: path) }
+    }
+
+    /// The untracked symlinks git status lists, as full paths. Empty when git does not answer.
+    static func untrackedLinks(at path: String, git: String) -> [String] {
+        (statusEntries(at: path, git: git) ?? []).filter { isUntrackedLink($0, in: path) }.map { path + "/" + $0.dropFirst(3) }
+    }
+
+    /// One `XY path` entry per change, or nil when status fails or times out.
+    /// With -z, a rename adds its old path as one more entry; any non-untracked entry already means changes.
+    private static func statusEntries(at path: String, git: String) -> [Substring]? {
+        let status = Shell.run(git, ["-C", path, "status", "--porcelain", "-z", "--untracked-files=normal"], timeout: 60)
+        guard status.status == 0, !status.timedOut else { return nil }
+        return status.output.split(separator: "\0")
+    }
+
+    private static func isUntrackedLink(_ entry: Substring, in path: String) -> Bool {
+        guard entry.hasPrefix("?? ") else { return false }
+        let full = path + "/" + entry.dropFirst(3)
+        return (try? FileManager.default.destinationOfSymbolicLink(atPath: full)) != nil
     }
 
     /// Commits on HEAD that no remote branch has. A failed check counts as yes.

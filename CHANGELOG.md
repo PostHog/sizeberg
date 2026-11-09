@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- A worktree whose only untracked files are symlinks, such as the `node_modules` links agent tools put into each worktree, no longer counts as having uncommitted changes. An ignore rule like `node_modules/` matches folders only, so git lists those links. Delete removes the links first, never what they point to, and then runs `git worktree remove` as before.
+- Background helpers such as OrbStack and Docker Desktop no longer keep a worktree or folder from being deleted. They keep the current folder of the terminal they were first started from, for days, without working there.
+- A test makes sure the check for uncommitted changes leaves the git index untouched, because its modification time is what tells when a worktree was last used.
+
 ## 0.1.6
 
 - Folders next to your repositories are offered for deletion only where they look like leftovers: in a code folder with at least 5 repositories, where plain folders are at most a quarter of what it holds. Elsewhere, such as a few repositories with your own projects beside them, or anything in Documents, Desktop or Downloads, they are listed with their size but not offered. Build output and caches inside them can still go with Build Output.

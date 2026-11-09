@@ -103,8 +103,15 @@ struct AgentActivity {
         }
     }
 
-    /// The current directory of every process this user can read, this one left out. A dev server,
-    /// an editor or a shell sitting in a folder leaves no other trace that the folder is in use.
+    /// Background helpers that keep the current directory of the shell that first started them,
+    /// for days, without working there. OrbStack started from a terminal in a worktree is one.
+    static let helpersWithInheritedFolder: Set<String> = [
+        "OrbStack Helper", "OrbStack", "com.docker.backend", "com.docker.build", "Docker Desktop",
+    ]
+
+    /// The current directory of every process this user can read, this one and background helpers
+    /// left out. A dev server, an editor or a shell sitting in a folder leaves no other trace that
+    /// the folder is in use.
     static func processFolders() -> [ProcessFolder] {
         let count = proc_listallpids(nil, 0)
         guard count > 0 else { return [] }
@@ -123,7 +130,10 @@ struct AgentActivity {
             }
             guard !folder.isEmpty else { continue }
             let executable = proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count)) > 0 ? String(cString: pathBuffer) : ""
-            folders.append(ProcessFolder(pid: pid, executable: executable, folder: folder))
+            let process = ProcessFolder(pid: pid, executable: executable, folder: folder)
+            if !helpersWithInheritedFolder.contains(process.name) {
+                folders.append(process)
+            }
         }
         return folders
     }

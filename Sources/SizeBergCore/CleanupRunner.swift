@@ -267,7 +267,18 @@ public enum CleanupRunner {
         if let reason = reasonToSkip(step) {
             return .skipped(reason)
         }
+        if step.kind == .worktree, let git = Shell.find("git") {
+            removeUntrackedLinks(in: step.path, git: git)
+        }
         return runCommand(step)
+    }
+
+    /// git worktree remove refuses untracked files, symlinks included, although deleting a link
+    /// deletes no data. Only the links go here; the targets stay.
+    private static func removeUntrackedLinks(in worktree: String, git: String) {
+        for link in GitInspector.untrackedLinks(at: worktree, git: git) {
+            try? FileManager.default.removeItem(atPath: link)
+        }
     }
 
     private static func runCommand(_ step: CleanupStep) -> CleanupOutcome {
