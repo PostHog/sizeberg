@@ -107,7 +107,9 @@ struct TempLeftovers {
         // the folder macOS makes for a safe save.
         if let dot = name.lastIndex(of: "."), dot != name.startIndex, !name[..<dot].contains("."), name[..<dot] != "TemporaryDirectory" {
             let suffix = name[name.index(after: dot)...]
-            let random = suffix.contains(where: \.isNumber) || (suffix.contains(where: \.isUppercase) && suffix.contains(where: \.isLowercase))
+            // Digits only read like a date or a version, so a letter is required too.
+            let mixed = suffix.contains(where: \.isUppercase) && suffix.contains(where: \.isLowercase)
+            let random = suffix.contains(where: \.isLetter) && (suffix.contains(where: \.isNumber) || mixed)
             if suffix.count >= 6, suffix.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }), random {
                 return String(name[...dot])
             }

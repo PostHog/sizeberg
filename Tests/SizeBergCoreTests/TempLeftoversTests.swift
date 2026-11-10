@@ -18,6 +18,7 @@ struct TempLeftoversTests {
         ("node-compile-cache", nil),
         ("report.backup", nil),
         ("backup-20251110", nil),
+        ("backup.20251110", nil),
     ] as [(String, String?)])
     func generatedPrefix(name: String, prefix: String?) {
         #expect(TempLeftovers.generatedPrefix(name) == prefix)
