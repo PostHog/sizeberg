@@ -113,35 +113,83 @@ struct AgentActivity {
     /// left out. A dev server, an editor or a shell sitting in a folder leaves no other trace that
     /// the folder is in use.
     static func processFolders() -> [ProcessFolder] {
-        let count = proc_listallpids(nil, 0)
-        guard count > 0 else { return [] }
-        var pids = [pid_t](repeating: 0, count: Int(count) * 2)
-        let found = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
-        guard found > 0 else { return [] }
-        let own = getpid()
-        var folders: [ProcessFolder] = []
         var pathBuffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
-        for pid in pids.prefix(Int(found)) where pid > 0 && pid != own {
-            var info = proc_vnodepathinfo()
-            let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
-            guard proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size) == size else { continue }
-            let folder = withUnsafeBytes(of: info.pvi_cdir.vip_path) { raw in
-                String(cString: raw.bindMemory(to: CChar.self).baseAddress!)
-            }
-            guard !folder.isEmpty else { continue }
-            let executable = proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count)) > 0 ? String(cString: pathBuffer) : ""
-            let process = ProcessFolder(pid: pid, executable: executable, folder: folder)
-            if !helpersWithInheritedFolder.contains(process.name) {
-                folders.append(process)
-            }
+        return otherProcesses().compactMap { pid in
+            guard let folder = currentFolder(of: pid) else { return nil }
+            let process = ProcessFolder(pid: pid, executable: executable(of: pid, buffer: &pathBuffer), folder: folder)
+            return helpersWithInheritedFolder.contains(process.name) ? nil : process
         }
-        return folders
+    }
+
+    /// Current folders and open files of every process, kept only when they are in one of `roots`.
+    /// A tool that writes into a temp folder often never changes its current folder there, so an open
+    /// file is the only sign that the folder is in use. `folder` holds the path of the open file then.
+    static func pathsInUse(under roots: [String]) -> [ProcessFolder] {
+        let realRoots = roots.map(realPath)
+        let isUnderRoot = { (path: String) in realRoots.contains { path == $0 || path.hasPrefix($0 + "/") } }
+        var pathBuffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        var found: [ProcessFolder] = []
+        for pid in otherProcesses() {
+            let paths = ([currentFolder(of: pid)].compactMap { $0 } + openFiles(of: pid)).filter(isUnderRoot)
+            guard !paths.isEmpty else { continue }
+            let executable = executable(of: pid, buffer: &pathBuffer)
+            let processes = paths.map { ProcessFolder(pid: pid, executable: executable, folder: $0) }
+            found += processes.filter { !helpersWithInheritedFolder.contains($0.name) }
+        }
+        return found
     }
 
     /// A process working in `path` or below it, if any.
     static func process(workingIn path: String) -> ProcessFolder? {
         let real = realPath(path)
         return processFolders().first { $0.folder == real || $0.folder.hasPrefix(real + "/") }
+    }
+
+    /// Every process this user can read, except this one.
+    private static func otherProcesses() -> [pid_t] {
+        let count = proc_listallpids(nil, 0)
+        guard count > 0 else { return [] }
+        var pids = [pid_t](repeating: 0, count: Int(count) * 2)
+        let found = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        guard found > 0 else { return [] }
+        let own = getpid()
+        return pids.prefix(Int(found)).filter { $0 > 0 && $0 != own }
+    }
+
+    private static func currentFolder(of pid: pid_t) -> String? {
+        var info = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size) == size else { return nil }
+        let folder = withUnsafeBytes(of: info.pvi_cdir.vip_path) { raw in
+            String(cString: raw.bindMemory(to: CChar.self).baseAddress!)
+        }
+        return folder.isEmpty ? nil : folder
+    }
+
+    private static func openFiles(of pid: pid_t) -> [String] {
+        let listSize = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+        guard listSize > 0 else { return [] }
+        let stride = MemoryLayout<proc_fdinfo>.stride
+        var descriptors = [proc_fdinfo](repeating: proc_fdinfo(), count: Int(listSize) / stride)
+        let used = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, &descriptors, Int32(descriptors.count * stride))
+        guard used > 0 else { return [] }
+        var paths: [String] = []
+        for descriptor in descriptors.prefix(Int(used) / stride) where descriptor.proc_fdtype == UInt32(PROX_FDTYPE_VNODE) {
+            var info = vnode_fdinfowithpath()
+            let size = Int32(MemoryLayout<vnode_fdinfowithpath>.size)
+            guard proc_pidfdinfo(pid, descriptor.proc_fd, PROC_PIDFDVNODEPATHINFO, &info, size) == size else { continue }
+            let path = withUnsafeBytes(of: info.pvip.vip_path) { raw in
+                String(cString: raw.bindMemory(to: CChar.self).baseAddress!)
+            }
+            if !path.isEmpty {
+                paths.append(path)
+            }
+        }
+        return paths
+    }
+
+    private static func executable(of pid: pid_t, buffer: inout [CChar]) -> String {
+        proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 ? String(cString: buffer) : ""
     }
 
     /// For the check right before a worktree is deleted.

@@ -35,6 +35,33 @@ public enum GroupKind: String, Codable, Sendable {
     case buildOutput
 }
 
+/// What coding agents leave outside checkouts and worktrees. The list shows each section as one row
+/// with its items below it, the way a main checkout holds its worktrees.
+public enum AgentWasteSection: String, Codable, CaseIterable, Sendable {
+    case scratchpads = "Claude Code scratchpads"
+    case tempLeftovers = "Leftover temp folders"
+    case toolCaches = "Tool caches in temp folders"
+    case other = "Other agent files"
+
+    /// Ids of the section rows. The report does not store them; `Report.sectionItem` derives them.
+    public var itemID: Int {
+        -100 - AgentWasteSection.allCases.firstIndex(of: self)!
+    }
+
+    public var summary: String {
+        switch self {
+        case .scratchpads:
+            return "Scratch folders of Claude Code sessions in /private/tmp. A session idle for \(Discovery.duration(ClaudeScratchpads.idleTime)), with no process using its folder, can go."
+        case .tempLeftovers:
+            return "Temp folders that tools made with a random name and never removed, often because the run was killed. Grouped by name."
+        case .toolCaches:
+            return "Folders marked as caches (CACHEDIR.TAG) in ~/.cache and the temp folders, like a Cargo target folder per agent run. The next run builds them again."
+        case .other:
+            return "Shown for their size only. Nothing here is offered for deletion."
+        }
+    }
+}
+
 public enum WorktreeStatus: String, Codable, Sendable {
     case active
     case stale
@@ -139,8 +166,14 @@ public struct GroupReport: Codable, Identifiable, Sendable {
     public var note: String?
     /// Set for checkouts and worktrees a coding agent worked in. Nil when none did, or in older reports.
     public var agent: AgentState? = nil
+    /// Set for what coding agents leave outside checkouts. Nil for everything else, and in older reports.
+    public var section: AgentWasteSection? = nil
+    /// For agent waste: a process holds it or it changed recently, so it stays.
+    public var inUse: Bool? = nil
 
     public var path: String { paths.first ?? "" }
+    /// The row of an agent waste section, which holds its items like a main checkout holds worktrees.
+    public var isSectionItem: Bool { section != nil && id == section?.itemID }
 }
 
 /// Shared copy-on-write data whose copies live in exactly these groups.

@@ -28,7 +28,7 @@ struct ScanCache {
 
     let directory: URL
 
-    init(directory: URL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Caches/sizeberg/groups")) {
+    init(directory: URL = Report.dataFolder.appendingPathComponent("groups")) {
         self.directory = directory
     }
 

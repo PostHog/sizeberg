@@ -13,7 +13,7 @@ brew install --cask posthog/tap/sizeberg
 That installs `SizeBerg.app` and the `sizeberg` command. It needs macOS 15 Sequoia or later on Apple silicon.
 
 - **Updates**: releases signed with PostHog's Developer ID update themselves through [Sparkle](https://sparkle-project.org): SizeBerg checks once a day, and SizeBerg › Check for Updates… checks now. Builds that are not signed that way, such as local ones, update with `brew upgrade --cask sizeberg`.
-- **Uninstall**: `brew uninstall --zap sizeberg` removes the app, the command, the scan cache in `~/Library/Caches/sizeberg` and the settings. Without Homebrew, delete the app and those folders by hand; the cask's `zap` list in `homebrew/sizeberg.rb.tmpl` names each path.
+- **Uninstall**: `brew uninstall --zap sizeberg` removes the app, the command, the scan cache in `~/Library/Application Support/SizeBerg` and the settings. Without Homebrew, delete the app and those folders by hand; the cask's `zap` list in `homebrew/sizeberg.rb.tmpl` names each path.
 
 ## Build and run
 
@@ -27,7 +27,7 @@ build/sizeberg --clear-cache   # forget earlier scans; the app has Clear Cache (
 SDKROOT=$(xcode-select -p)/SDKs/MacOSX26.sdk swift test   # accounting, scoring and change-tracking tests
 ```
 
-Both write the last scan to `~/Library/Caches/sizeberg/last-scan.json`, and the app opens on it.
+Both write the last scan to `~/Library/Application Support/SizeBerg/last-scan.json`, and the app opens on it.
 
 The app is a plain SwiftUI split view: filters in the sidebar, the list or the map in the middle, the selected item in the inspector, and the cleanup plan in a bar under the list. Worktree rows show their git state in front of the branch: local work, merged, or remote branch gone. With the command line tools it builds against their macOS 26 SDK, because the macOS 27 SDK makes `@State` a macro whose plugin ships only with Xcode. macOS 27 restyles the glass at run time either way.
 
@@ -54,7 +54,7 @@ Measured on an M-series MacBook with 18 million files in the scanned folders.
 - **Useful numbers early**: caches, build output, git data and source are read first, dependency trees last. Dependency trees hold half the files but little of what deleting frees. While the scan runs, each item shows "at least" what is certain so far. Once its last folder is read it says Final: the clone copy count tells whether every copy is inside the item, so its number is exact without waiting for the rest. On the test machine, 77% of the final total showed after 25 seconds and 95% after 37 seconds of an 80 second scan.
 - **Rescans**: about 3 to 6 seconds. They ask the FSEvents history which folders changed since the last scan and walk only those. Each top-level folder of a worktree or cache is cached on its own, so an edit in `frontend/src` re-walks `frontend`, not `node_modules`.
 - **Progress**: rescans and full scans show a share and time left, from the last scan's file counts. A first scan shows folders done and time spent. A full scan shows the live table with the last scan's numbers as dashed bars.
-- The cache lives in `~/Library/Caches/sizeberg/groups` (about 250 MB for 18 million files). `--full`, or Full Scan in the app, ignores it. A worktree that did not change since the last scan keeps its `git status` answer, so rescans do not read big worktrees again.
+- The cache lives in `~/Library/Application Support/SizeBerg/groups` (about 250 MB for 18 million files). It is not in `~/Library/Caches`, so cleaners like Mole leave it alone. `--full`, or Full Scan in the app, ignores it. A worktree that did not change since the last scan keeps its `git status` answer, so rescans do not read big worktrees again.
 - The scan turns off access time updates for its own reads, so reading folders writes no metadata.
 
 ## How the numbers work

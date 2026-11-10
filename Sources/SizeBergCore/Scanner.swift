@@ -655,9 +655,11 @@ private struct ReportBuilder {
                 apparentBytes: buckets.reduce(0) { $0 + $1.apparentBytes },
                 privateBytes: privateBytes,
                 freeableAloneBytes: privateBytes + (totals.sets[GroupSet(index)]?.bytes ?? 0),
-                selectable: spec.kind != .mainCheckout && !(spec.kind == .project && spec.cleanupCommand == nil),
+                selectable: spec.kind != .mainCheckout && !((spec.kind == .project || spec.section != nil) && spec.cleanupCommand == nil),
                 cleanupCommand: spec.cleanupCommand,
-                note: spec.note
+                note: spec.note,
+                section: spec.section,
+                inUse: spec.inUse
             ))
         }
 

@@ -1,9 +1,21 @@
 import Foundation
 
 extension Report {
+    /// In Application Support, not Caches: cleaners like Mole empty ~/Library/Caches, and the next
+    /// scan then reads every folder again.
+    public static let dataFolder: URL = {
+        let library = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library")
+        let folder = library.appendingPathComponent("Application Support/SizeBerg")
+        let old = library.appendingPathComponent("Caches/sizeberg")
+        if !FileManager.default.fileExists(atPath: folder.path), FileManager.default.fileExists(atPath: old.path) {
+            try? FileManager.default.createDirectory(at: folder.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? FileManager.default.moveItem(at: old, to: folder)
+        }
+        return folder
+    }()
+
     public static var cacheURL: URL {
-        URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/Caches/sizeberg/last-scan.json")
+        dataFolder.appendingPathComponent("last-scan.json")
     }
 
     public static func loadCached() -> Report? {
@@ -41,6 +53,9 @@ extension Report {
     public func group(_ id: Int) -> GroupReport? {
         if id == Report.buildOutputID {
             return buildOutputItem
+        }
+        if let section = AgentWasteSection.allCases.first(where: { $0.itemID == id }) {
+            return sectionItem(section)
         }
         return groups.indices.contains(id) && groups[id].id == id ? groups[id] : groups.first { $0.id == id }
     }
@@ -108,6 +123,25 @@ extension Report {
     private func buildOutputBytes(keeping selection: Set<Int>) -> Int64 {
         guard selection.contains(Report.buildOutputID) else { return 0 }
         return groups.filter { !selection.contains($0.id) }.reduce(0) { $0 + $1.trimBytes }
+    }
+
+    /// The items of one agent waste section.
+    public func items(in section: AgentWasteSection) -> [GroupReport] {
+        groups.filter { $0.section == section }
+    }
+
+    /// One row for an agent waste section, with its items' totals. Like a main checkout, it is never deleted itself.
+    public func sectionItem(_ section: AgentWasteSection) -> GroupReport? {
+        let members = items(in: section)
+        guard !members.isEmpty else { return nil }
+        return GroupReport(
+            id: section.itemID, kind: .cache, name: section.rawValue, paths: [], git: nil, buckets: [],
+            apparentBytes: members.reduce(0) { $0 + $1.apparentBytes },
+            privateBytes: members.reduce(0) { $0 + $1.privateBytes },
+            // Only what can go: items in use and size-only items stay.
+            freeableAloneBytes: freeableBytes(selection: Set(members.filter(\.selectable).map(\.id))),
+            selectable: false, cleanupCommand: nil, note: section.summary, section: section
+        )
     }
 
     /// Worktrees of the repository whose main checkout is `main`, matched by repository path.

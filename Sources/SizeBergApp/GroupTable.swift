@@ -1,18 +1,19 @@
 import SizeBergCore
 import SwiftUI
 
-/// One table row: an item, or a main checkout with its worktrees below it.
-/// A main checkout row sums up its worktrees, since the checkout itself is never deleted.
+/// One table row: an item, or a parent row with items below it. A parent is a main checkout with its
+/// worktrees, or an agent waste section with its items. It sums up its items, since it is never deleted itself.
 struct ItemRow: Identifiable {
     let group: GroupReport
-    /// Worktrees shown below a main checkout. Nil for a plain row.
+    /// Items shown below a parent row. Nil for a plain row.
     var children: [ItemRow]?
-    /// Frees-alone bytes, or for a main checkout what its listed worktrees free together.
+    /// Frees-alone bytes, or for a parent what its listed items free together.
     let freesBytes: Int64
     let duBytes: Int64
-    /// Cleanup value, or the sum of the worktrees' values for a main checkout.
+    /// Cleanup value, or the sum of the items' values for a parent.
     let cleanupKey: Int64
-    let staleCount: Int
+    /// Stale worktrees under a main checkout, items in use under an agent waste section.
+    let flaggedCount: Int
     /// Sorts working agents first, then by how recently one worked. Zero when none did.
     var agentKey: Double {
         guard let agent = group.agent else { return 0 }
@@ -24,7 +25,9 @@ struct ItemRow: Identifiable {
     var id: Int { group.id }
     var name: String { group.name }
     var typeKey: String { group.statusText }
-    var isRepository: Bool { children != nil }
+    var isParent: Bool { children != nil }
+    var isRepository: Bool { isParent && group.kind == .mainCheckout }
+    var isSection: Bool { isParent && group.isSectionItem }
 
     init(group: GroupReport) {
         self.group = group
@@ -32,22 +35,25 @@ struct ItemRow: Identifiable {
         freesBytes = group.freeableAloneBytes
         duBytes = group.apparentBytes
         cleanupKey = group.cleanupSortKey
-        staleCount = 0
+        flaggedCount = 0
         trimBytes = group.trimBytes
     }
 
-    init(repository: GroupReport, worktrees: [GroupReport], report: Report) {
-        group = repository
-        children = worktrees.map { ItemRow(group: $0) }
-        // Together, not a sum: blocks shared only among these worktrees free once all of them go.
-        freesBytes = report.freeableBytes(selection: Set(worktrees.map(\.id)))
-        duBytes = worktrees.reduce(0) { $0 + $1.apparentBytes }
-        cleanupKey = worktrees.reduce(0) { $0 + max(0, $1.cleanupSortKey) }
-        staleCount = worktrees.filter(\.goesWithStale).count
-        trimBytes = worktrees.reduce(repository.trimBytes) { $0 + $1.trimBytes }
+    init(parent: GroupReport, items: [GroupReport], report: Report) {
+        group = parent
+        children = items.map { ItemRow(group: $0) }
+        // Together, not a sum: blocks shared only among these items free once all of them go.
+        // A section counts only the items that can go; the rest are in use or shown for their size.
+        let freeable = parent.isSectionItem ? items.filter(\.selectable) : items
+        freesBytes = report.freeableBytes(selection: Set(freeable.map(\.id)))
+        duBytes = items.reduce(0) { $0 + $1.apparentBytes }
+        cleanupKey = items.reduce(0) { $0 + max(0, $1.cleanupSortKey) }
+        flaggedCount = parent.isSectionItem ? items.filter { $0.inUse == true }.count : items.filter(\.goesWithStale).count
+        trimBytes = items.reduce(parent.trimBytes) { $0 + $1.trimBytes }
     }
 
-    /// Rows for the visible groups, with worktrees under their main checkout when `nested` is on.
+    /// Rows for the visible groups, with worktrees under their main checkout and agent waste under
+    /// its section when `nested` is on.
     static func rows(visible: [GroupReport], report: Report, nested: Bool) -> [ItemRow] {
         guard nested else { return visible.map { ItemRow(group: $0) } }
         let visibleIDs = Set(visible.map(\.id))
@@ -57,12 +63,18 @@ struct ItemRow: Identifiable {
             let worktrees = report.worktrees(of: main).filter { visibleIDs.contains($0.id) }
             placed.formUnion(worktrees.map(\.id))
             if !worktrees.isEmpty {
-                rows.append(ItemRow(repository: main, worktrees: worktrees, report: report))
+                rows.append(ItemRow(parent: main, items: worktrees, report: report))
                 placed.insert(main.id)
             } else if visibleIDs.contains(main.id) {
                 rows.append(ItemRow(group: main))
                 placed.insert(main.id)
             }
+        }
+        for section in AgentWasteSection.allCases {
+            let items = visible.filter { $0.section == section }
+            guard !items.isEmpty, let parent = report.sectionItem(section) else { continue }
+            rows.append(ItemRow(parent: parent, items: items, report: report))
+            placed.formUnion(items.map(\.id))
         }
         rows += visible.filter { !placed.contains($0.id) }.map { ItemRow(group: $0) }
         return rows
@@ -77,12 +89,12 @@ struct GroupTable: View {
 
     var body: some View {
         @Bindable var model = model
-        let rows = sorted(ItemRow.rows(visible: model.visibleGroups(in: report), report: report, nested: model.groupWorktrees))
+        let rows = sorted(ItemRow.rows(visible: model.visibleGroups(in: report), report: report, nested: model.groupItems))
         Table(of: ItemRow.self, selection: $model.focusedID, sortOrder: $sortOrder) {
             TableColumn("Name", value: \.name) { row in
                 VStack(alignment: .leading, spacing: 1) {
                     Text(row.group.name)
-                        .fontWeight(row.isRepository ? .semibold : .regular)
+                        .fontWeight(row.isParent ? .semibold : .regular)
                         .lineLimit(1)
                     if row.children == nil, row.group.kind == .worktree {
                         BranchLabel(group: row.group)
@@ -116,7 +128,7 @@ struct GroupTable: View {
                         Text(row.group.kind == .system ? "n/a" : bytes(row.freesBytes))
                             .monospacedDigit()
                             .fontWeight(.medium)
-                        if row.isRepository {
+                        if row.isParent {
                             Text("together")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -200,6 +212,15 @@ struct GroupTable: View {
                     .disabled(stale.allSatisfy { model.selection.contains($0.id) })
                     .help("Select the \(stale.count) stale \(stale.count == 1 ? "worktree" : "worktrees") of \(row.name). The checkout and active worktrees stay.")
             }
+        } else if row.isSection, let section = row.group.section {
+            let deletable = report.items(in: section).filter(\.selectable)
+            if !deletable.isEmpty {
+                Button("Select All") { model.selectDeletable(in: section) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(deletable.allSatisfy { model.selection.contains($0.id) })
+                    .help("Select the \(deletable.count) \(deletable.count == 1 ? "item" : "items") here that can go. Items in use and size-only items stay.")
+            }
         } else {
             Toggle("", isOn: model.binding(for: row.id))
                 .labelsHidden()
@@ -218,15 +239,18 @@ struct GroupTable: View {
         }
         guard let children = row.children else { return row.group.subtitle }
         let count = children.count
-        return "\(count) \(count == 1 ? "worktree" : "worktrees")" + (row.staleCount > 0 ? " · \(row.staleCount) stale" : "")
+        if row.isSection {
+            return "\(count) \(count == 1 ? "item" : "items")" + (row.flaggedCount > 0 ? " · \(row.flaggedCount) in use" : "")
+        }
+        return "\(count) \(count == 1 ? "worktree" : "worktrees")" + (row.flaggedCount > 0 ? " · \(row.flaggedCount) stale" : "")
     }
 
     @ViewBuilder
     private func cleanupCell(_ row: ItemRow) -> some View {
-        if row.isRepository {
+        if row.isParent {
             VStack(alignment: .leading, spacing: 3) {
                 CleanupMeter(weightedBytes: row.cleanupKey)
-                Text("sum of its worktrees")
+                Text(row.isRepository ? "sum of its worktrees" : "sum of its items")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -12,6 +12,7 @@ public struct CleanupStep: Identifiable, Sendable {
     /// Set when the step deletes only build output and caches inside an item that stays.
     public var isTrim = false
     public var folders: [String] = []
+    public var section: AgentWasteSection? = nil
 
     public var id: String { "\(groupIDs[0])-\(isTrim ? "trim" : "item")" }
 }
@@ -62,11 +63,17 @@ public enum CleanupRunner {
                 steps.append(CleanupStep(
                     groupIDs: [group.id], name: group.name, kind: group.kind, path: group.path,
                     command: command, expectedBytes: group.freeableAloneBytes,
-                    folders: group.name == ClaudeScratchpads.itemName ? group.paths : []
+                    folders: group.section != nil || isLegacyScratchpads(group) ? group.paths : [],
+                    section: isLegacyScratchpads(group) ? .scratchpads : group.section
                 ))
             }
         }
         return (steps, manual)
+    }
+
+    /// A report saved by 0.1.7 or older has one scratchpad item and no sections. It must get the same checks.
+    private static func isLegacyScratchpads(_ group: GroupReport) -> Bool {
+        group.kind == .cache && group.section == nil && group.name == ClaudeScratchpads.legacyItemName
     }
 
     /// One step per item, for its build output and caches together, biggest first.
@@ -99,8 +106,12 @@ public enum CleanupRunner {
             return worktreeReasonToSkip(step)
         case .project:
             return folderReasonToSkip(step)
-        case .cache where step.name == ClaudeScratchpads.itemName:
+        case .cache where step.section == .scratchpads:
             return ClaudeScratchpads().reasonToSkip(step.folders)
+        case .cache where step.section == .tempLeftovers || step.section == .toolCaches:
+            return TempLeftovers().reasonToSkip(step.folders)
+        case .cache where step.section == .other:
+            return "Shown for its size only."
         default:
             return nil
         }

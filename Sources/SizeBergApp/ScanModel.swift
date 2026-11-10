@@ -10,6 +10,7 @@ final class ScanModel {
         case worktrees = "Worktrees"
         case folders = "Folders"
         case caches = "Caches"
+        case agentWaste = "Agent waste"
         case stale = "Stale"
         case plan = "Cleanup plan"
 
@@ -21,6 +22,7 @@ final class ScanModel {
             case .worktrees: return "arrow.triangle.branch"
             case .folders: return "folder"
             case .caches: return "archivebox"
+            case .agentWaste: return "terminal"
             case .stale: return "clock.badge.exclamationmark"
             case .plan: return "checklist"
             }
@@ -57,9 +59,9 @@ final class ScanModel {
     var copiedPlan = false
     var viewMode: ViewMode = .list
     var showInspector = true
-    /// Lists worktrees under their main checkout instead of as rows of their own.
-    var groupWorktrees = true
-    /// Main checkouts whose worktrees are folded away. Repositories start open, so stale worktrees stay in sight.
+    /// Lists worktrees under their main checkout, and agent waste under its section, instead of as rows of their own.
+    var groupItems = true
+    /// Main checkouts and agent waste sections whose items are folded away. They start open, so stale worktrees stay in sight.
     var collapsedRepositories: Set<Int> = []
     /// The cleanup sheet's state while it is open.
     var cleanup: CleanupSession?
@@ -170,7 +172,8 @@ final class ScanModel {
             case .all: break
             case .worktrees: guard group.kind == .worktree || group.kind == .mainCheckout else { return false }
             case .folders: guard group.kind == .project else { return false }
-            case .caches: guard [.cache, .system, .buildOutput].contains(group.kind) else { return false }
+            case .caches: guard [.cache, .system, .buildOutput].contains(group.kind), group.section == nil else { return false }
+            case .agentWaste: guard group.section != nil else { return false }
             case .stale: guard group.git.map({ $0.status != .active }) ?? false else { return false }
             case .plan: return selection.contains(group.id)
             }
@@ -247,7 +250,13 @@ final class ScanModel {
 
     func collapseAllRepositories() {
         guard let report else { return }
-        collapsedRepositories = Set(report.groups.filter { $0.kind == .mainCheckout }.map(\.id))
+        collapsedRepositories = Set(report.groups.filter { $0.kind == .mainCheckout }.map(\.id) + AgentWasteSection.allCases.map(\.itemID))
+    }
+
+    /// Selects the items of one agent waste section that can go. Items in use and size-only items stay.
+    func selectDeletable(in section: AgentWasteSection) {
+        guard let report else { return }
+        selection.formUnion(report.items(in: section).filter(\.selectable).map(\.id))
     }
 
     /// Opens the confirmation sheet for the selection.

@@ -16,6 +16,8 @@ public struct CleanupScore: Sendable {
 extension GroupReport {
     /// Caches fill again on the next install or build, which costs time but loses nothing.
     static let cacheConfidence = 0.6
+    /// A scratch or temp folder of a run that ended is used by nothing; only a resumed session reads it again.
+    static let leftoverConfidence = 0.9
     /// Quiet days at which confidence reaches about 63%. In line with the stale rules, which wait
     /// 3 days for merged or remote-gone work and 21 days for any work (95% here).
     static let quietDaysScale = 7.0
@@ -34,6 +36,11 @@ extension GroupReport {
             return nil
         case .project where cleanupCommand == nil:
             return nil
+        case .cache where section != nil:
+            guard cleanupCommand != nil else { return nil }
+            return section == .toolCaches
+                ? score(confidence: Self.cacheConfidence, reason: "next run builds it again", hasLocalWork: false)
+                : score(confidence: Self.leftoverConfidence, reason: "left by a finished run", hasLocalWork: false)
         case .cache:
             return score(confidence: Self.cacheConfidence, reason: "refills when used", hasLocalWork: false)
         case .buildOutput:

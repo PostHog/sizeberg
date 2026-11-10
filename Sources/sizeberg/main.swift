@@ -15,7 +15,7 @@ where copy-on-write clones make du and Finder count shared data many times.
   --plan        Print cleanup commands for stale worktrees and the package stores. Runs nothing.
   --clear-cache Delete the last report and the scan cache, so the next scan starts from nothing.
 
-The last report is saved to ~/Library/Caches/sizeberg/last-scan.json for the app.
+The last report is saved to ~/Library/Application Support/SizeBerg/last-scan.json for the app.
 """
 
 var roots: [String] = []
@@ -34,7 +34,7 @@ while let argument = arguments.popFirst() {
     case "--clear-cache":
         do {
             try Report.clearCaches()
-            print("Cleared ~/Library/Caches/sizeberg")
+            print("Cleared ~/Library/Application Support/SizeBerg")
             exit(0)
         } catch {
             FileHandle.standardError.write(Data("Could not clear the cache: \(error)\n".utf8))
