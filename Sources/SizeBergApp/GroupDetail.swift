@@ -45,7 +45,7 @@ struct GroupDetail: View {
                     buildOutputHolders
                 }
             }
-            if group.kind != .system, group.kind != .buildOutput, group.apparentBytes > 0 {
+            if group.kind != .system, group.kind != .buildOutput, !group.isSectionItem, group.apparentBytes > 0 {
                 Section(group.kind == .mainCheckout ? "What deleting the checkout would free" : "What deleting frees") {
                     SizeBreakdown(report: report, group: group)
                 }

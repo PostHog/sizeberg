@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- New "Agent waste" filter for what coding agents and their tools leave outside checkouts. Each kind of waste is one row, with its items below it, the way a main checkout holds its worktrees:
+  - Claude Code scratchpads: a session that a process uses gets a row of its own, with that process named. Idle sessions that can go make one row per project. A session can go after a day without changes (was 3 days), when no process works in its folder or has a file open there.
+  - Leftover temp folders: folders in `/tmp` and `$TMPDIR` with a generated name, like Python's `tmpk3x_9a1b` or mktemp's `tmp.Ab12Cd34`, grouped by name. Killed or crashed runs never remove them. They can go after 6 hours without changes and with no process using them.
+  - Tool caches in temp folders: folders marked with `CACHEDIR.TAG` in `~/.cache` and the temp folders, such as a Cargo target folder per agent run.
+  - The rest of `/tmp`, `$TMPDIR` and the Claude Code transcripts, for their size only.
+- The check for a process in a folder now also finds processes with a file open there, not only ones whose current folder it is.
+- The scan cache moved to `~/Library/Application Support/SizeBerg`, so cleaners that empty `~/Library/Caches`, like Mole, no longer force a full rescan. The old folder moves over on first start.
+- "Group worktrees under main checkout" is now "Group worktrees and agent waste".
+
 ## 0.1.7
 
 - A worktree whose only untracked files are symlinks, such as the `node_modules` links agent tools put into each worktree, no longer counts as having uncommitted changes. An ignore rule like `node_modules/` matches folders only, so git lists those links. Delete removes the links first, never what they point to, and then runs `git worktree remove` as before.

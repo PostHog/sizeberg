@@ -13,6 +13,8 @@ struct GroupSpec {
     var fixedBytes: Int64?
     /// Container disks get `docker system df` output in their note. It is slow, so the scanner runs it in the background.
     var showsDockerUsage = false
+    var section: AgentWasteSection?
+    var inUse: Bool?
 
     var isWalked: Bool { fixedBytes == nil && kind != .system }
 }
@@ -32,6 +34,8 @@ struct Discovery {
     let home: String
     let git: GitInspector?
     var scratchpads = ClaudeScratchpads()
+    var tempFolders = TempLeftovers()
+    var transcriptsFolder = NSHomeDirectory() + "/.claude/projects"
 
     func discover() -> [GroupSpec] {
         let childrenByRoot = roots.map { (root: realPath($0), children: directories(in: realPath($0))) }
@@ -48,7 +52,10 @@ struct Discovery {
                 return projectSpec(folder, offersDelete: offersDelete && !holdsGit, holdsGit: holdsGit, root: root)
             }
         }
-        let fixed = cacheSpecs() + scratchpadSpecs(keeping: worktrees) + systemSpecs()
+        let caches = cacheSpecs()
+        // Repositories and worktrees in a temp folder are items of their own, with checks for local work.
+        let agentWaste = agentWasteSpecs(keeping: worktrees, claimed: caches.flatMap(\.paths) + Array(claimed))
+        let fixed = caches + agentWaste + systemSpecs()
         let projectRoom = GroupSet.maxGroups - specs.count - fixed.count - 1
         specs += lumpOverflow(projects, room: projectRoom)
         specs += fixed
@@ -218,27 +225,147 @@ struct Discovery {
         }
     }
 
-    /// One item for the scratch folders of finished Claude Code sessions. The command names each
-    /// folder, so a session that is still running keeps its own.
-    private func scratchpadSpecs(keeping worktrees: [String]) -> [GroupSpec] {
-        let sessions = scratchpads.sessions(keeping: worktrees)
-        guard !sessions.idle.isEmpty else { return [] }
-        let days = Int(ClaudeScratchpads.idleTime / 86400)
-        var note = "Scratch folders of \(sessions.idle.count) Claude Code sessions idle for \(days) days or more."
-        if sessions.activeCount > 0 {
-            note += " The \(sessions.activeCount) newer sessions keep theirs."
+    /// Most items each section may add. The rest that can go share one item, so every byte is still counted.
+    static let maxSessionItems = 10
+    static let maxLeftoverItems = 15
+    static let maxToolCacheItems = 20
+
+    /// What coding agents and their tools leave outside checkouts: one item per Claude Code session,
+    /// per leftover temp folder prefix and per tool cache, then the rest of the temp folders and the
+    /// transcripts for their size only.
+    private func agentWasteSpecs(keeping worktrees: [String], claimed: [String]) -> [GroupSpec] {
+        let inUse = AgentActivity.pathsInUse(under: [scratchpads.root] + tempFolders.roots)
+        let found = tempFolders.find(claimed: claimed, inUse: inUse)
+        return sessionSpecs(scratchpads.sessions(keeping: worktrees, inUse: inUse), named: worktrees)
+            + leftoverSpecs(found.leftovers)
+            + toolCacheSpecs(found.toolCaches)
+            + otherAgentSpecs(found.other)
+    }
+
+    /// A session a process uses gets a row of its own: that is where the big scratch folders are. Idle
+    /// sessions that can go make one row per project. Recent sessions and those that hold git data share
+    /// one row each, so dozens of small sessions do not use up the item limit.
+    private func sessionSpecs(_ sessions: [ClaudeScratchpads.Session], named: [String]) -> [GroupSpec] {
+        let names = Dictionary(named.map { (AgentActivity.projectFolderName(for: $0), ($0 as NSString).lastPathComponent) },
+                               uniquingKeysWith: { first, _ in first })
+        let homeFolder = AgentActivity.projectFolderName(for: home)
+        let projectName = { (project: String) -> String in
+            if project == homeFolder { return "~" }
+            return names[project] ?? String(project.dropFirst(project.hasPrefix(homeFolder + "-") ? homeFolder.count + 1 : 0))
         }
-        note += " A session that holds a git repository or worktree keeps its folder, since it may hold the only copy of commits."
-        return [GroupSpec(
+        var specs: [GroupSpec] = []
+        let held = sessions.filter { $0.holder != nil }
+        for session in held.prefix(Self.maxSessionItems) {
+            specs.append(agentWasteSpec(.scratchpads, name: "\(projectName(session.project)) · \(session.id.prefix(8))", paths: [session.path],
+                                        deletable: false, inUse: true, note: "In use: \(session.holder!)."))
+        }
+        let unheld = sessions.filter { $0.holder == nil }
+        let recent = unheld.filter { !$0.isIdle } + held.dropFirst(Self.maxSessionItems)
+        if !recent.isEmpty {
+            specs.append(agentWasteSpec(.scratchpads, name: "Recent sessions (\(recent.count))", paths: recent.map(\.path), deletable: false,
+                                        inUse: false, note: "Active in the last \(Self.duration(ClaudeScratchpads.idleTime)) or in use, so their scratch folders stay."))
+        }
+        let withGit = unheld.filter { $0.isIdle && $0.holdsGit }
+        if !withGit.isEmpty {
+            specs.append(agentWasteSpec(.scratchpads, name: "Sessions with git data (\(withGit.count))", paths: withGit.map(\.path),
+                                        deletable: false, inUse: false,
+                                        note: "They hold a git repository, which may have the only copy of its commits. Check them by hand."))
+        }
+        let idle = Dictionary(grouping: unheld.filter(\.canDelete), by: \.project)
+            .sorted { ($0.value.count, $1.key) > ($1.value.count, $0.key) }
+        for (project, projectSessions) in idle.prefix(Self.maxSessionItems) {
+            let count = projectSessions.count
+            specs.append(agentWasteSpec(.scratchpads, name: "\(projectName(project)) · \(count) idle \(count == 1 ? "session" : "sessions")",
+                                        paths: projectSessions.map(\.path), deletable: true, inUse: false,
+                                        note: "Idle for \(Self.duration(ClaudeScratchpads.idleTime)) or more, and no process uses them."))
+        }
+        let rest = idle.dropFirst(Self.maxSessionItems).flatMap(\.value)
+        if !rest.isEmpty {
+            specs.append(agentWasteSpec(.scratchpads, name: "Other idle sessions (\(rest.count))", paths: rest.map(\.path),
+                                        deletable: true, inUse: false, note: "Idle for \(Self.duration(ClaudeScratchpads.idleTime)) or more, and no process uses them."))
+        }
+        return specs
+    }
+
+    private func leftoverSpecs(_ leftovers: [TempLeftovers.Leftover]) -> [GroupSpec] {
+        var specs = leftovers.prefix(Self.maxLeftoverItems).map { leftover in
+            agentWasteSpec(.tempLeftovers, name: leftover.prefix + "*", paths: leftover.paths, deletable: true, inUse: false,
+                           note: "\(leftover.paths.count) \(leftover.paths.count == 1 ? "folder" : "folders") in \(tempPlaces(leftover.paths)). Unchanged for \(Self.duration(TempLeftovers.quietTime)), and no process uses them.")
+        }
+        let rest = leftovers.dropFirst(Self.maxLeftoverItems).flatMap(\.paths)
+        if !rest.isEmpty {
+            specs.append(agentWasteSpec(.tempLeftovers, name: "Other generated names (\(rest.count))", paths: rest, deletable: true,
+                                        inUse: false, note: "Unchanged for \(Self.duration(TempLeftovers.quietTime)), and no process uses them."))
+        }
+        return specs
+    }
+
+    private func toolCacheSpecs(_ caches: [TempLeftovers.ToolCache]) -> [GroupSpec] {
+        let kept = caches.filter { !$0.canDelete }
+        let deletable = caches.filter(\.canDelete)
+        let room = max(1, Self.maxToolCacheItems - kept.count)
+        var specs = (kept.prefix(Self.maxToolCacheItems) + deletable.prefix(room)).map { cache in
+            let note = cache.holder.map { "In use: \($0)." }
+                ?? (cache.isQuiet ? "Unchanged for \(Self.duration(TempLeftovers.quietTime)), and no process uses it. The next run builds it again." : "Changed in the last \(Self.duration(TempLeftovers.quietTime)).")
+            return agentWasteSpec(.toolCaches, name: (cache.path as NSString).lastPathComponent, paths: [cache.path],
+                                  deletable: cache.canDelete, inUse: cache.holder != nil, note: note)
+        }
+        let keptRest = kept.dropFirst(Self.maxToolCacheItems).map(\.path)
+        if !keptRest.isEmpty {
+            specs.append(agentWasteSpec(.toolCaches, name: "Other tool caches in use (\(keptRest.count))", paths: keptRest, deletable: false,
+                                        inUse: false, note: "Changed in the last \(Self.duration(TempLeftovers.quietTime)), or a process uses them."))
+        }
+        let rest = deletable.dropFirst(room).map(\.path)
+        if !rest.isEmpty {
+            specs.append(agentWasteSpec(.toolCaches, name: "Other tool caches (\(rest.count))", paths: rest, deletable: true,
+                                        inUse: false, note: "Unchanged for \(Self.duration(TempLeftovers.quietTime)), and no process uses them."))
+        }
+        return specs
+    }
+
+    private func otherAgentSpecs(_ other: [String: [String]]) -> [GroupSpec] {
+        var specs = tempFolders.tempRoots.compactMap { root -> GroupSpec? in
+            guard let paths = other[root], !paths.isEmpty else { return nil }
+            return agentWasteSpec(.other, name: "Other files in \(tempPlaces([root + "/"]))", paths: paths, deletable: false, inUse: nil,
+                                  note: "\(paths.count) folders of yours that the scan cannot tie to one tool, or that changed in the last \(Self.duration(TempLeftovers.quietTime)) or are in use.")
+        }
+        if FileManager.default.fileExists(atPath: transcriptsFolder) {
+            specs.append(agentWasteSpec(.other, name: "Claude Code transcripts", paths: [realPath(transcriptsFolder)], deletable: false,
+                                        inUse: nil, note: "Session history in ~/.claude/projects. Claude Code needs it to resume a session."))
+        }
+        return specs
+    }
+
+    /// A wait like "6 hours" or "a day", for notes that name the rule.
+    static func duration(_ seconds: TimeInterval) -> String {
+        let hours = Int(seconds / 3600)
+        if hours % 24 == 0 {
+            let days = hours / 24
+            return days == 1 ? "a day" : "\(days) days"
+        }
+        return hours == 1 ? "an hour" : "\(hours) hours"
+    }
+
+    /// The temp folders the paths are in, as people know them.
+    private func tempPlaces(_ paths: [String]) -> String {
+        let places = tempFolders.tempRoots.filter { root in paths.contains { $0.hasPrefix(root + "/") } }
+            .map { $0 == "/private/tmp" ? "/tmp" : "$TMPDIR" }
+        return places.joined(separator: " and ")
+    }
+
+    private func agentWasteSpec(_ section: AgentWasteSection, name: String, paths: [String], deletable: Bool, inUse: Bool?, note: String) -> GroupSpec {
+        GroupSpec(
             kind: .cache,
-            name: ClaudeScratchpads.itemName,
-            paths: sessions.idle,
+            name: name,
+            paths: paths,
             classify: false,
             defaultKind: .caches,
             gitSeed: nil,
-            cleanupCommand: "rm -rf " + sessions.idle.map(shellQuote).joined(separator: " "),
-            note: note
-        )]
+            cleanupCommand: deletable ? "rm -rf " + paths.map(shellQuote).joined(separator: " ") : nil,
+            note: note,
+            section: section,
+            inUse: inUse
+        )
     }
 
     /// pnpm keeps one store per layout version. Only the newest one is used by a current pnpm.

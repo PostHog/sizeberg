@@ -71,6 +71,12 @@ func folderSummary(_ folders: [String], names shown: Int = 3) -> String {
 
 extension GroupReport {
     var statusText: String {
+        if let section {
+            if isSectionItem { return "Agent waste" }
+            if inUse == true { return "In use" }
+            if section == .other { return "Size only" }
+            return selectable ? "Leftover" : "Kept"
+        }
         switch kind {
         case .mainCheckout: return "Main checkout"
         case .project: return "Folder"
@@ -88,6 +94,9 @@ extension GroupReport {
     }
 
     var statusColor: Color {
+        if section != nil, !isSectionItem, inUse == true || !selectable {
+            return .secondary
+        }
         switch git?.status {
         case .stale: return .red
         // System orange and yellow are too light for text on their own tint; these pass 4.5:1.
@@ -121,6 +130,9 @@ extension GroupReport {
     var subtitle: String {
         if let branch = git?.branch {
             return branch
+        }
+        if section != nil, paths.count > 1 {
+            return "\(paths.count) folders in \(displayPath((path as NSString).deletingLastPathComponent))"
         }
         return displayPath(path)
     }

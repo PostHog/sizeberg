@@ -76,7 +76,7 @@ struct ContentView: View {
             .disabled(model.isBusy)
             Menu {
                 Toggle("Hide items under 50 MB", isOn: $model.hideSmall)
-                Toggle("Group worktrees under main checkout", isOn: $model.groupWorktrees)
+                Toggle("Group worktrees and agent waste", isOn: $model.groupItems)
             } label: {
                 Label("Filter", systemImage: "line.3.horizontal.decrease")
             }

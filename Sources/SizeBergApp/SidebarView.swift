@@ -18,6 +18,7 @@ struct SidebarView: View {
                 row(.worktrees)
                 row(.folders)
                 row(.caches)
+                row(.agentWaste)
             }
             Section("Cleanup") {
                 row(.stale)

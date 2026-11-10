@@ -4,17 +4,28 @@ import Foundation
 /// The scratch folders Claude Code gives each session, in `/private/tmp/claude-<uid>/<project>/<session id>`.
 /// `<project>` has the name of the session's transcript folder in `~/.claude/projects`, and
 /// `<session id>.jsonl` there changes while the session runs. A session that has not changed for
-/// `idleTime` is over, so its scratch folder can go.
+/// `idleTime`, and whose folder no process uses, is over, so its scratch folder can go.
 ///
 /// A session folder that holds git data stays: a clone made there can hold the only copy of its
-/// commits, and a worktree is an item of its own whose delete checks for local work first.
+/// commits. A session folder that holds a worktree is left out, since the worktree is an item of
+/// its own whose delete checks for local work first.
 struct ClaudeScratchpads {
-    static let idleTime: TimeInterval = 3 * 24 * 60 * 60
-    static let itemName = "Claude Code scratchpads"
+    static let idleTime: TimeInterval = 24 * 60 * 60
+    /// The name of the one scratchpad item in reports from 0.1.7 and older, which have no section.
+    static let legacyItemName = "Claude Code scratchpads"
 
-    struct Sessions: Equatable {
-        var idle: [String]
-        var activeCount: Int
+    struct Session: Equatable {
+        var path: String
+        /// The transcript folder name, like `-Users-me-workspace-app`.
+        var project: String
+        var id: String
+        var isIdle: Bool
+        /// The process that works in the folder or has a file open there, like "pid 123, claude".
+        var holder: String?
+        /// Checked only for idle sessions no process uses.
+        var holdsGit: Bool
+
+        var canDelete: Bool { isIdle && holder == nil && !holdsGit }
     }
 
     let root: String
@@ -29,32 +40,39 @@ struct ClaudeScratchpads {
         self.now = now
     }
 
-    func sessions(keeping worktrees: [String]) -> Sessions {
-        var result = Sessions(idle: [], activeCount: 0)
+    /// Every session folder of this user, newest project folders first in name order.
+    /// `inUse` comes from `AgentActivity.pathsInUse`, read once for every agent waste folder.
+    func sessions(keeping worktrees: [String], inUse: [AgentActivity.ProcessFolder]) -> [Session] {
         // /private/tmp is shared by every account, so the root must be this user's own private folder.
-        guard Self.isOwnFolder(root, privateToOwner: true) else { return result }
+        guard Self.isOwnFolder(root, privateToOwner: true) else { return [] }
+        var result: [Session] = []
         for project in Self.children(of: root) where project.hasPrefix("-") {
             let projectFolder = root + "/" + project
             guard Self.isOwnFolder(projectFolder) else { continue }
             for session in Self.children(of: projectFolder) where UUID(uuidString: session) != nil {
                 let folder = projectFolder + "/" + session
                 guard Self.isOwnFolder(folder), !worktrees.contains(where: { $0.hasPrefix(folder + "/") }) else { continue }
-                guard isIdle(folder) else {
-                    result.activeCount += 1
-                    continue
-                }
-                if !holdsGitData(folder) {
-                    result.idle.append(folder)
-                }
+                let holder = inUse.first { $0.folder == folder || $0.folder.hasPrefix(folder + "/") }
+                let idle = isIdle(folder)
+                result.append(Session(
+                    path: folder,
+                    project: project,
+                    id: session,
+                    isIdle: idle,
+                    holder: holder.map { "pid \($0.pid), \($0.name)" },
+                    // The check reads the whole folder, so it runs only where it can change the answer.
+                    holdsGit: idle && holder == nil && holdsGitData(folder)
+                ))
             }
         }
-        result.idle.sort()
         return result
     }
 
     /// Checks the folders again right before they are deleted: the scan may be days old.
     func reasonToSkip(_ folders: [String]) -> String? {
-        for folder in folders where FileManager.default.fileExists(atPath: folder) {
+        let existing = folders.filter { FileManager.default.fileExists(atPath: $0) }
+        let inUse = AgentActivity.pathsInUse(under: existing)
+        for folder in existing {
             let name = (folder as NSString).lastPathComponent
             let project = (folder as NSString).deletingLastPathComponent
             guard (project as NSString).deletingLastPathComponent == root,
@@ -67,8 +85,8 @@ struct ClaudeScratchpads {
             if holdsGitData(folder) {
                 return "Session \(name) holds a git repository now."
             }
-            if let process = AgentActivity.process(workingIn: folder) {
-                return "A running process is working in session \(name) (pid \(process.pid), \(process.name))."
+            if let holder = TempLeftovers.holder(of: folder, in: inUse) {
+                return "A running process uses session \(name) (\(holder))."
             }
         }
         return nil
