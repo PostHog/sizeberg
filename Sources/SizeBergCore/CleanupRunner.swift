@@ -247,7 +247,8 @@ public enum CleanupRunner {
         }
         for batch in batches {
             var result = Shell.run("/bin/rm", ["-rf"] + batch, timeout: 30 * 60, mergeErrors: true)
-            if result.status != 0 {
+            // A timeout is not a permission problem, so the chmod retry would only add another hour.
+            if result.status != 0, !result.timedOut {
                 let left = batch.filter { FileManager.default.fileExists(atPath: $0) }
                 _ = Shell.run("/bin/chmod", ["-R", "u+w"] + left, timeout: 30 * 60, mergeErrors: true)
                 result = Shell.run("/bin/rm", ["-rf"] + left, timeout: 30 * 60, mergeErrors: true)
