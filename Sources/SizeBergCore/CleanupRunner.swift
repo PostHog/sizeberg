@@ -100,18 +100,23 @@ public enum CleanupRunner {
 
     /// Checks an item again right before deleting it: the scan may be minutes old. Nil means safe to run.
     static func reasonToSkip(_ step: CleanupStep) -> String? {
+        // An agent waste item holds many folders. The first one can be gone while the rest still need their checks.
+        switch step.section {
+        case .scratchpads:
+            return ClaudeScratchpads().reasonToSkip(step.folders)
+        case .tempLeftovers, .toolCaches:
+            return TempLeftovers().reasonToSkip(step.folders)
+        case .other:
+            return "Shown for its size only."
+        case nil:
+            break
+        }
         guard FileManager.default.fileExists(atPath: step.path) else { return nil }
         switch step.kind {
         case .worktree:
             return worktreeReasonToSkip(step)
         case .project:
             return folderReasonToSkip(step)
-        case .cache where step.section == .scratchpads:
-            return ClaudeScratchpads().reasonToSkip(step.folders)
-        case .cache where step.section == .tempLeftovers || step.section == .toolCaches:
-            return TempLeftovers().reasonToSkip(step.folders)
-        case .cache where step.section == .other:
-            return "Shown for its size only."
         default:
             return nil
         }
@@ -242,7 +247,8 @@ public enum CleanupRunner {
         }
         for batch in batches {
             var result = Shell.run("/bin/rm", ["-rf"] + batch, timeout: 30 * 60, mergeErrors: true)
-            if result.status != 0 {
+            // A timeout is not a permission problem, so the chmod retry would only add another hour.
+            if result.status != 0, !result.timedOut {
                 let left = batch.filter { FileManager.default.fileExists(atPath: $0) }
                 _ = Shell.run("/bin/chmod", ["-R", "u+w"] + left, timeout: 30 * 60, mergeErrors: true)
                 result = Shell.run("/bin/rm", ["-rf"] + left, timeout: 30 * 60, mergeErrors: true)
@@ -280,6 +286,10 @@ public enum CleanupRunner {
         }
         if step.kind == .worktree, let git = Shell.find("git") {
             removeUntrackedLinks(in: step.path, git: git)
+        }
+        // Thousands of temp folders in one shell command would pass the argument size limit, so they go in batches.
+        if step.section != nil {
+            return remove(step.folders.filter { FileManager.default.fileExists(atPath: $0) })
         }
         return runCommand(step)
     }
