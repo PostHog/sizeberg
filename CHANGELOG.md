@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.8
 
 - New "Agent waste" filter for what coding agents and their tools leave outside checkouts. Each kind of waste is one row, with its items below it, the way a main checkout holds its worktrees:
   - Claude Code scratchpads: a session that a process uses gets a row of its own, with that process named. Idle sessions that can go make one row per project. A session can go after a day without changes (was 3 days), when no process works in its folder or has a file open there.
