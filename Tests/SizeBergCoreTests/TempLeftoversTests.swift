@@ -51,6 +51,13 @@ struct TempLeftoversTests {
         #expect(found.toolCaches.map(\.path) == ["\(realTemp)/target-run", "\(realCache)/lint-target-n1"])
         #expect(found.other[realTemp] == ["\(realTemp)/notes", "\(realTemp)/tmpused_001", "\(realTemp)/tmpyoung_01"])
         #expect(TempLeftovers(tempRoots: [temp], cacheRoot: cache, now: later).reasonToSkip(found.leftovers[0].paths) == nil)
+        // A rewrite deep inside changes neither the folder nor anything directly in it.
+        try FileManager.default.createDirectory(atPath: "\(realTemp)/tmpcc33dd44/out", withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: "\(realTemp)/tmpcc33dd44/out/result.json", contents: Data())
+        try FileManager.default.setAttributes([.modificationDate: Date.distantPast], ofItemAtPath: "\(realTemp)/tmpcc33dd44/out")
+        try FileManager.default.setAttributes([.modificationDate: later], ofItemAtPath: "\(realTemp)/tmpcc33dd44/out/result.json")
+        #expect(TempLeftovers(tempRoots: [temp], cacheRoot: cache, now: later).reasonToSkip(found.leftovers[0].paths) == "tmpcc33dd44 changed since the scan.")
+        try FileManager.default.removeItem(atPath: "\(realTemp)/tmpcc33dd44")
         try FileManager.default.createDirectory(atPath: "\(realTemp)/tmpaa11bb22/clone/.git", withIntermediateDirectories: true)
         #expect(TempLeftovers(tempRoots: [temp], cacheRoot: cache, now: later).reasonToSkip(found.leftovers[0].paths) == "tmpaa11bb22 holds a git repository now.")
         #expect(found.other[realCache] == nil)
@@ -60,5 +67,17 @@ struct TempLeftoversTests {
     @Test func aRootInsideAnotherIsScannedOnce() {
         let roots = TempLeftovers(tempRoots: ["/private/tmp", "/tmp", "/private/tmp/claude-1/session"], cacheRoot: "/nonexistent").tempRoots
         #expect(roots == ["/private/tmp"])
+    }
+
+    /// The step's own path is its first folder. When that one is gone, the other folders still need their checks.
+    @Test func groupedDeleteChecksTheRestWhenTheFirstFolderIsGone() throws {
+        let temp = realPath(NSTemporaryDirectory())
+        let gone = temp + "/tmpgone_\(Int.random(in: 100...999))", fresh = temp + "/tmpnew_\(Int.random(in: 1000...9999))"
+        try FileManager.default.createDirectory(atPath: fresh, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: fresh) }
+        let step = CleanupStep(groupIDs: [0], name: "tmp*", kind: .cache, path: gone, command: "rm -rf",
+                               expectedBytes: 0, folders: [gone, fresh], section: .tempLeftovers)
+
+        #expect(CleanupRunner.reasonToSkip(step) != nil)
     }
 }

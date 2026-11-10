@@ -306,6 +306,7 @@ struct Discovery {
         let room = max(1, Self.maxToolCacheItems - kept.count)
         var specs = (kept.prefix(Self.maxToolCacheItems) + deletable.prefix(room)).map { cache in
             let note = cache.holder.map { "In use: \($0)." }
+                ?? (cache.holdsSocket ? "Holds a socket, so a service may use it." : nil)
                 ?? (cache.isQuiet ? "Unchanged for \(Self.duration(TempLeftovers.quietTime)), and no process uses it. The next run builds it again." : "Changed in the last \(Self.duration(TempLeftovers.quietTime)).")
             return agentWasteSpec(.toolCaches, name: (cache.path as NSString).lastPathComponent, paths: [cache.path],
                                   deletable: cache.canDelete, inUse: cache.holder != nil, note: note)
