@@ -130,11 +130,14 @@ struct AgentActivity {
         var pathBuffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
         var found: [ProcessFolder] = []
         for pid in otherProcesses() {
-            let paths = ([currentFolder(of: pid)].compactMap { $0 } + openFiles(of: pid)).filter(isUnderRoot)
-            guard !paths.isEmpty else { continue }
+            let folder = currentFolder(of: pid).flatMap { isUnderRoot($0) ? $0 : nil }
+            let files = openFiles(of: pid).filter(isUnderRoot)
+            guard folder != nil || !files.isEmpty else { continue }
             let executable = executable(of: pid, buffer: &pathBuffer)
-            let processes = paths.map { ProcessFolder(pid: pid, executable: executable, folder: $0) }
-            found += processes.filter { !helpersWithInheritedFolder.contains($0.name) }
+            let name = ProcessFolder(pid: pid, executable: executable, folder: "").name
+            // A helper's current folder is inherited and says nothing; a file it holds open does.
+            let paths = (helpersWithInheritedFolder.contains(name) ? [] : [folder].compactMap { $0 }) + files
+            found += paths.map { ProcessFolder(pid: pid, executable: executable, folder: $0) }
         }
         return found
     }

@@ -26,8 +26,9 @@ struct TempLeftovers {
         /// The process that uses it, like "pid 123, cargo".
         var holder: String?
         var isQuiet: Bool
+        var holdsSocket = false
 
-        var canDelete: Bool { isQuiet && holder == nil }
+        var canDelete: Bool { isQuiet && holder == nil && !holdsSocket }
     }
 
     struct Found: Equatable {
@@ -71,7 +72,7 @@ struct TempLeftovers {
                 let holder = Self.holder(of: path, in: inUse)
                 let quiet = isQuiet(path)
                 if FileManager.default.fileExists(atPath: path + "/CACHEDIR.TAG") {
-                    found.toolCaches.append(ToolCache(path: path, holder: holder, isQuiet: quiet))
+                    found.toolCaches.append(ToolCache(path: path, holder: holder, isQuiet: quiet, holdsSocket: Self.holdsSocket(path)))
                     continue
                 }
                 guard isTemp else { continue }
@@ -106,7 +107,9 @@ struct TempLeftovers {
         // the folder macOS makes for a safe save.
         if let dot = name.lastIndex(of: "."), dot != name.startIndex, !name[..<dot].contains("."), name[..<dot] != "TemporaryDirectory" {
             let suffix = name[name.index(after: dot)...]
-            let random = suffix.contains(where: \.isNumber) || (suffix.contains(where: \.isUppercase) && suffix.contains(where: \.isLowercase))
+            // Digits only read like a date or a version, so a letter is required too.
+            let mixed = suffix.contains(where: \.isUppercase) && suffix.contains(where: \.isLowercase)
+            let random = suffix.contains(where: \.isLetter) && (suffix.contains(where: \.isNumber) || mixed)
             if suffix.count >= 6, suffix.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }), random {
                 return String(name[...dot])
             }
@@ -129,8 +132,30 @@ struct TempLeftovers {
             if !isQuiet(folder) {
                 return "\(name) changed since the scan."
             }
+            if let reason = activityDeepInside(folder) {
+                return "\(name) \(reason)."
+            }
             if holdsGitData(folder) {
                 return "\(name) holds a git repository now."
+            }
+        }
+        return nil
+    }
+
+    /// The scan looks only at the folder and the files directly in it. Right before deleting, every file
+    /// counts: a tool can rewrite `out/result.json` without changing either folder, and a service can
+    /// listen on a socket deep inside.
+    private func activityDeepInside(_ folder: String) -> String? {
+        guard let entries = FileManager.default.enumerator(atPath: folder) else { return nil }
+        let cutoff = now.timeIntervalSince1970 - Self.quietTime
+        while let entry = entries.nextObject() as? String {
+            var info = stat()
+            guard lstat(folder + "/" + entry, &info) == 0 else { continue }
+            if (info.st_mode & S_IFMT) == S_IFSOCK {
+                return "holds a socket, so a service may use it"
+            }
+            if TimeInterval(info.st_mtimespec.tv_sec) > cutoff {
+                return "changed since the scan"
             }
         }
         return nil
