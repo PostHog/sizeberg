@@ -1,5 +1,25 @@
 import Foundation
 
+/// What deleting an item would lose, in one word. The table shows it; size has a column of its own.
+/// It follows what is lost, not the confidence number: a cache scores 0.6 because rebuilding it takes
+/// time, yet deleting it loses nothing.
+public enum CleanupVerdict: Int, Comparable, Sendable, CaseIterable {
+    /// Nothing is lost: caches, build output, leftovers of finished runs, a worktree whose folder is gone.
+    case safe
+    /// Quiet and without local work, so most likely not needed.
+    case likely
+    /// Used lately, though nothing would be lost.
+    case recent
+    /// An agent or a process works there now.
+    case inUse
+    /// Deleting would lose uncommitted changes or commits no remote has.
+    case risky
+
+    public static func < (lhs: CleanupVerdict, rhs: CleanupVerdict) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+}
+
 /// How worthwhile deleting an item is: what it frees alone, weighted by how likely it is no longer needed.
 /// Ranks a big quiet merged worktree above a bigger one in daily use.
 public struct CleanupScore: Sendable {
@@ -11,6 +31,7 @@ public struct CleanupScore: Sendable {
     public var reason: String
     /// True when deleting would lose uncommitted changes or commits no remote has.
     public var hasLocalWork: Bool
+    public var verdict: CleanupVerdict
 }
 
 extension GroupReport {
@@ -26,6 +47,8 @@ extension GroupReport {
     static let localWorkFactor = 0.3
     /// The scan runs git status only for stale worktrees. Elsewhere uncommitted work is unknown, not absent.
     static let uncheckedFactor = 0.5
+    /// Below this, an item without local work counts as used lately rather than likely not needed.
+    static let likelyConfidence = 0.4
     /// A folder outside git has no merge state to go on.
     static let folderFactor = 0.5
 
@@ -39,23 +62,23 @@ extension GroupReport {
         case .cache where section != nil:
             guard cleanupCommand != nil else { return nil }
             return section == .toolCaches
-                ? score(confidence: Self.cacheConfidence, reason: "next run builds it again", hasLocalWork: false)
-                : score(confidence: Self.leftoverConfidence, reason: "left by a finished run", hasLocalWork: false)
+                ? score(confidence: Self.cacheConfidence, reason: "next run builds it again", verdict: .safe)
+                : score(confidence: Self.leftoverConfidence, reason: "left by a finished run", verdict: .safe)
         case .cache:
-            return score(confidence: Self.cacheConfidence, reason: "refills when used", hasLocalWork: false)
+            return score(confidence: Self.cacheConfidence, reason: "refills on next install or build", verdict: .safe)
         case .buildOutput:
-            return score(confidence: Self.cacheConfidence, reason: "next build puts it back", hasLocalWork: false)
+            return score(confidence: Self.cacheConfidence, reason: "next build puts it back", verdict: .safe)
         case .worktree, .project:
             break
         }
         if agent?.isWorking == true {
-            return score(confidence: 0, reason: "agent working", hasLocalWork: false)
+            return score(confidence: 0, reason: "agent working", verdict: .inUse)
         }
         guard let git else {
-            return score(confidence: Self.folderFactor * Self.cacheConfidence, reason: "folder", hasLocalWork: false)
+            return score(confidence: Self.folderFactor * Self.cacheConfidence, reason: "not a git repository", verdict: .likely)
         }
         if git.status == .missing {
-            return score(confidence: 1, reason: "folder gone, prune", hasLocalWork: false)
+            return score(confidence: 1, reason: "folder gone, prune", verdict: .safe)
         }
 
         var parts: [String] = []
@@ -79,21 +102,23 @@ extension GroupReport {
             confidence *= Self.uncheckedFactor
             // Only worth saying where it holds a quiet worktree back; in-use ones rank low anyway.
             if (quietDays ?? 0) >= 3 {
-                parts.append("changes not checked")
+                parts.append("git status not checked")
             }
         }
         if kind == .project {
             confidence *= Self.folderFactor
         }
-        return score(confidence: confidence, reason: parts.joined(separator: " · "), hasLocalWork: hasLocalWork)
+        let verdict: CleanupVerdict = hasLocalWork ? .risky : confidence >= Self.likelyConfidence ? .likely : .recent
+        return score(confidence: confidence, reason: parts.joined(separator: " · "), verdict: verdict)
     }
 
-    private func score(confidence: Double, reason: String, hasLocalWork: Bool) -> CleanupScore {
+    private func score(confidence: Double, reason: String, verdict: CleanupVerdict) -> CleanupScore {
         CleanupScore(
             weightedBytes: Int64(Double(freeableAloneBytes) * confidence),
             confidence: confidence,
             reason: reason,
-            hasLocalWork: hasLocalWork
+            hasLocalWork: verdict == .risky,
+            verdict: verdict
         )
     }
 

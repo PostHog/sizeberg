@@ -39,4 +39,20 @@ struct CleanupScoreTests {
         #expect(ranked == ["finished", "local-work", "in-use"])
         #expect(localWork.cleanupScore(now: Self.now)!.confidence < 0.31)
     }
+
+    /// The verdict follows what deleting loses, not the confidence number: a cache scores 0.6 only because
+    /// rebuilding it takes time, so reading the number as risk would call every cache doubtful.
+    @Test func verdictFollowsWhatDeletingLoses() {
+        var cache = Self.worktree("cache", gigabytes: 1, quietDays: 0, merged: nil)
+        cache.kind = .cache
+        cache.git = nil
+        let finished = Self.worktree("finished", gigabytes: 1, quietDays: 10, merged: true, uncommitted: false)
+        let localWork = Self.worktree("local-work", gigabytes: 1, quietDays: 30, merged: false, uncommitted: true)
+        let usedToday = Self.worktree("used-today", gigabytes: 1, quietDays: 0.2, merged: nil)
+
+        #expect(cache.cleanupScore(now: Self.now)?.verdict == .safe)
+        #expect(finished.cleanupScore(now: Self.now)?.verdict == .likely)
+        #expect(localWork.cleanupScore(now: Self.now)?.verdict == .risky)
+        #expect(usedToday.cleanupScore(now: Self.now)?.verdict == .recent)
+    }
 }

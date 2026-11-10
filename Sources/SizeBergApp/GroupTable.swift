@@ -247,13 +247,8 @@ struct GroupTable: View {
 
     @ViewBuilder
     private func cleanupCell(_ row: ItemRow) -> some View {
-        if row.isParent {
-            VStack(alignment: .leading, spacing: 3) {
-                CleanupMeter(weightedBytes: row.cleanupKey)
-                Text(row.isRepository ? "sum of its worktrees" : "sum of its items")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+        if let children = row.children {
+            CleanupSummaryCell(scores: children.compactMap { $0.group.cleanupScore() })
         } else if let score = row.group.cleanupScore() {
             CleanupCell(score: score)
         }
