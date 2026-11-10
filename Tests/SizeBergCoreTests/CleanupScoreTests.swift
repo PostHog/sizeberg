@@ -55,4 +55,18 @@ struct CleanupScoreTests {
         #expect(localWork.cleanupScore(now: Self.now)?.verdict == .risky)
         #expect(usedToday.cleanupScore(now: Self.now)?.verdict == .recent)
     }
+
+    /// A section sums up its items' verdicts. Kept items must keep theirs, or a section with an item in
+    /// use reads as all safe.
+    @Test(arguments: [(true, nil, CleanupVerdict.inUse), (false, true, .risky), (false, nil, .recent)] as [(Bool, Bool?, CleanupVerdict)])
+    func keptAgentWasteKeepsItsVerdict(inUse: Bool, holdsGit: Bool?, verdict: CleanupVerdict) {
+        var kept = Self.worktree("kept", gigabytes: 1, quietDays: 0, merged: nil)
+        kept.kind = .cache
+        kept.git = nil
+        kept.section = .scratchpads
+        kept.inUse = inUse
+        kept.holdsGitData = holdsGit
+
+        #expect(kept.cleanupScore(now: Self.now)?.verdict == verdict)
+    }
 }

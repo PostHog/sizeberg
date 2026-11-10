@@ -301,8 +301,8 @@ extension CleanupVerdict {
     var explanation: String {
         switch self {
         case .safe: return "Deleting it loses nothing: the next install, build or run puts it back, or nothing uses it."
-        case .likely: return "Quiet, without local work. Most likely no longer needed."
-        case .recent: return "Used lately. Nothing would be lost, but you may still need it."
+        case .likely: return "Quiet for a while, so most likely no longer needed. Local work counts only where git status was checked."
+        case .recent: return "Used lately, so you may still need it."
         case .inUse: return "An agent or a process works here now."
         case .risky: return "Deleting it loses uncommitted changes or commits no remote has."
         }

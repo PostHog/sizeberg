@@ -40,7 +40,8 @@ struct PlanBar: View {
             .help("Build output and caches in every checkout, worktree and folder. The items stay; the next build puts these back.")
         let staleBytes = report.freeableBytes(selection: report.staleSelection)
         Button("Select Stale · \(bytes(staleBytes))") { model.selectStale() }
-            .disabled(staleBytes == 0)
+            // Missing worktrees free nothing but still have a prune to run.
+            .disabled(report.staleSelection.isEmpty)
             .help("Worktrees quiet for 3 days with merged or remote-gone work, or quiet for 21 days, and the package stores that hold their dependencies.")
     }
 

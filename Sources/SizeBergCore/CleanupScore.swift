@@ -60,7 +60,16 @@ extension GroupReport {
         case .project where cleanupCommand == nil:
             return nil
         case .cache where section != nil:
-            guard cleanupCommand != nil else { return nil }
+            // Kept agent waste still gets a verdict, so a section's summary covers what stays too.
+            guard cleanupCommand != nil else {
+                if section == .other { return nil }
+                if holdsGitData == true {
+                    return score(confidence: 0, reason: "holds a git repository", verdict: .risky)
+                }
+                return inUse == true
+                    ? score(confidence: 0, reason: "a process uses it", verdict: .inUse)
+                    : score(confidence: 0, reason: "changed lately", verdict: .recent)
+            }
             return section == .toolCaches
                 ? score(confidence: Self.cacheConfidence, reason: "next run builds it again", verdict: .safe)
                 : score(confidence: Self.leftoverConfidence, reason: "left by a finished run", verdict: .safe)

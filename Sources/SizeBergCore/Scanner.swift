@@ -659,7 +659,8 @@ private struct ReportBuilder {
                 cleanupCommand: spec.cleanupCommand,
                 note: spec.note,
                 section: spec.section,
-                inUse: spec.inUse
+                inUse: spec.inUse,
+                holdsGitData: spec.holdsGitData
             ))
         }
 
