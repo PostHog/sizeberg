@@ -267,54 +267,107 @@ private struct BadgeLabelStyle: LabelStyle {
     }
 }
 
-/// Five steps of cleanup value, on frees-alone bytes weighted by how likely the item can go.
-struct CleanupMeter: View {
-    static let steps = 5
-
-    /// Frees-alone bytes weighted by how likely the item can go: `CleanupScore.weightedBytes`.
-    let weightedBytes: Int64
-
-    var level: Int {
-        let gigabytes = Double(weightedBytes) / 1_000_000_000
-        switch gigabytes {
-        case 5...: return 5
-        case 2..<5: return 4
-        case 0.5..<2: return 3
-        case 0.1..<0.5: return 2
-        case let value where value > 0: return 1
-        default: return 0
+extension CleanupVerdict {
+    var title: String {
+        switch self {
+        case .safe: return "Safe"
+        case .likely: return "Likely"
+        case .recent: return "Recent"
+        case .inUse: return "In use"
+        case .risky: return "Risky"
         }
     }
 
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(0..<Self.steps, id: \.self) { step in
-                Capsule()
-                    .fill(step < level ? Color.accentColor : Color.secondary.opacity(0.18))
-                    .frame(width: 7, height: 5)
-            }
+    var symbol: String {
+        switch self {
+        case .safe: return "checkmark.circle.fill"
+        case .likely: return "circle.lefthalf.filled"
+        case .recent: return "clock"
+        case .inUse: return "bolt.circle"
+        case .risky: return "exclamationmark.triangle.fill"
         }
-        .accessibilityElement()
-        .accessibilityLabel("Cleanup value \(level) of \(Self.steps)")
+    }
+
+    var color: Color {
+        switch self {
+        case .safe: return .adaptive(light: Color(red: 0.13, green: 0.50, blue: 0.24), dark: Color(red: 0.40, green: 0.82, blue: 0.50))
+        case .likely: return .blue
+        case .recent, .inUse: return .secondary
+        case .risky: return GroupReport.localWorkColor
+        }
+    }
+
+    /// What the word means, for the tooltip.
+    var explanation: String {
+        switch self {
+        case .safe: return "Deleting it loses nothing: the next install, build or run puts it back, or nothing uses it."
+        case .likely: return "Quiet for a while, so most likely no longer needed. Local work counts only where git status was checked."
+        case .recent: return "Used lately, so you may still need it."
+        case .inUse: return "An agent or a process works here now."
+        case .risky: return "Deleting it loses uncommitted changes or commits no remote has."
+        }
     }
 }
 
-/// Meter plus the facts behind it, for the table and the detail panel.
+/// The verdict as a word with a symbol. Size has its own column, so the badge says only what deleting loses.
+struct VerdictBadge: View {
+    let verdict: CleanupVerdict
+
+    var body: some View {
+        Label(verdict.title, systemImage: verdict.symbol)
+            .labelStyle(BadgeLabelStyle())
+            .font(.callout.weight(.medium))
+            .foregroundStyle(verdict.color)
+    }
+}
+
+/// Verdict plus the facts behind it, for the table and the detail panel.
 struct CleanupCell: View {
     let score: CleanupScore
-    /// Meter and reason on one line, for the detail panel.
+    /// Verdict and reason on one line, for the detail panel.
     var isInline = false
 
     var body: some View {
-        let layout = isInline ? AnyLayout(HStackLayout(spacing: 8)) : AnyLayout(VStackLayout(alignment: .leading, spacing: 3))
+        let layout = isInline ? AnyLayout(HStackLayout(spacing: 8)) : AnyLayout(VStackLayout(alignment: .leading, spacing: 1))
         layout {
-            CleanupMeter(weightedBytes: score.weightedBytes)
-            Text(score.reason)
-                .font(isInline ? .callout : .caption)
-                .foregroundStyle(score.hasLocalWork ? AnyShapeStyle(GroupReport.localWorkColor) : AnyShapeStyle(.secondary))
-                .lineLimit(1)
+            VerdictBadge(verdict: score.verdict)
+            if !score.reason.isEmpty {
+                Text(score.reason)
+                    .font(isInline ? .callout : .caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
-        .help("Frees \(bytes(score.weightedBytes)) weighted by how likely it can go (\(Int((score.confidence * 100).rounded()))%): \(score.reason)")
+        .help("\(score.verdict.explanation) The list sorts by what it frees times how sure the scan is (\(Int((score.confidence * 100).rounded()))% here).")
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// A checkout's worktrees or a section's items: the riskiest verdict, and how many share it.
+struct CleanupSummaryCell: View {
+    let scores: [CleanupScore]
+
+    var body: some View {
+        if let worst = scores.map(\.verdict).max() {
+            let count = scores.filter { $0.verdict == worst }.count
+            VStack(alignment: .leading, spacing: 1) {
+                VerdictBadge(verdict: worst)
+                Text(summary(worst: worst, count: count))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .help("The riskiest of its items. \(worst.explanation)")
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func summary(worst: CleanupVerdict, count: Int) -> String {
+        if count == scores.count {
+            return count == 1 ? "its only item" : "all \(count)"
+        }
+        let safe = scores.filter { $0.verdict == .safe }.count
+        return "\(count) of \(scores.count)" + (safe > 0 && worst != .safe ? " · \(safe) safe" : "")
     }
 }
 

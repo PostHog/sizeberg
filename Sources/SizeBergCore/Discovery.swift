@@ -15,6 +15,7 @@ struct GroupSpec {
     var showsDockerUsage = false
     var section: AgentWasteSection?
     var inUse: Bool?
+    var holdsGitData: Bool?
 
     var isWalked: Bool { fixedBytes == nil && kind != .system }
 }
@@ -268,7 +269,7 @@ struct Discovery {
         let withGit = unheld.filter { $0.isIdle && $0.holdsGit }
         if !withGit.isEmpty {
             specs.append(agentWasteSpec(.scratchpads, name: "Sessions with git data (\(withGit.count))", paths: withGit.map(\.path),
-                                        deletable: false, inUse: false,
+                                        deletable: false, inUse: false, holdsGit: true,
                                         note: "They hold a git repository, which may have the only copy of its commits. Check them by hand."))
         }
         let idle = Dictionary(grouping: unheld.filter(\.canDelete), by: \.project)
@@ -354,7 +355,8 @@ struct Discovery {
         return places.joined(separator: " and ")
     }
 
-    private func agentWasteSpec(_ section: AgentWasteSection, name: String, paths: [String], deletable: Bool, inUse: Bool?, note: String) -> GroupSpec {
+    private func agentWasteSpec(_ section: AgentWasteSection, name: String, paths: [String], deletable: Bool, inUse: Bool?,
+                                holdsGit: Bool = false, note: String) -> GroupSpec {
         GroupSpec(
             kind: .cache,
             name: name,
@@ -365,7 +367,8 @@ struct Discovery {
             cleanupCommand: deletable ? "rm -rf " + paths.map(shellQuote).joined(separator: " ") : nil,
             note: note,
             section: section,
-            inUse: inUse
+            inUse: inUse,
+            holdsGitData: holdsGit ? true : nil
         )
     }
 

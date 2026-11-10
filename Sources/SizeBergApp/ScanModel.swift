@@ -322,7 +322,7 @@ final class ScanModel {
     }
 
     /// Deleted items free more together than alone; trims add what each frees alone.
-    private static func expectedBytes(of steps: [CleanupStep], in report: Report) -> Int64 {
+    static func expectedBytes(of steps: [CleanupStep], in report: Report) -> Int64 {
         let items = Set(steps.filter { !$0.isTrim }.flatMap(\.groupIDs))
         let trimmed = steps.filter(\.isTrim).reduce(0) { $0 + $1.expectedBytes }
         return report.freeableBytes(selection: items) + trimmed

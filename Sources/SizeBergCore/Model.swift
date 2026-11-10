@@ -170,6 +170,8 @@ public struct GroupReport: Codable, Identifiable, Sendable {
     public var section: AgentWasteSection? = nil
     /// For agent waste: a process holds it or it changed recently, so it stays.
     public var inUse: Bool? = nil
+    /// For agent waste kept because it holds a git repository, which may have the only copy of commits.
+    public var holdsGitData: Bool? = nil
 
     public var path: String { paths.first ?? "" }
     /// The row of an agent waste section, which holds its items like a main checkout holds worktrees.

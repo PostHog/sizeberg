@@ -10,6 +10,8 @@
 - The check for a process in a folder now also finds processes with a file open there, not only ones whose current folder it is.
 - The scan cache moved to `~/Library/Application Support/SizeBerg`, so cleaners that empty `~/Library/Caches`, like Mole, no longer force a full rescan. The old folder moves over on first start.
 - "Group worktrees under main checkout" is now "Group worktrees and agent waste".
+- The Cleanup column shows a verdict instead of five dots: Safe, Likely, Recent, In use or Risky, after what deleting would lose. Size stays in its own column, and the list still sorts by size weighted by how sure the scan is.
+- The cleanup bar shows what the review sheet will delete, on the Delete button itself. Selected items the app does not delete itself show as "need you", with the reason and a way to deselect them.
 - Deleting agent waste checks every folder of an item again, even when the first one is already gone, and looks at every file inside for recent changes and sockets. Folders go in batches, so an item with thousands of temp folders no longer fails on the shell's argument limit. A file that Docker or OrbStack holds open in a temp folder keeps it.
 
 ## 0.1.7
