@@ -263,7 +263,7 @@ public final class Scanner {
               let state,
               state.volumeUUID != nil,
               state.volumeUUID == volumeUUID else { return [:] }
-        let roots = Array(Set(segments.filter(\.filesOnly).map(\.path)))
+        let roots = ChangeLog.watchRoots(segments.filter(\.filesOnly).map(\.path))
         guard let changed = ChangeLog.changes(since: state.eventID, under: roots) else { return [:] }
         let changedSegments = Self.segmentsOwning(changed, segments: segments)
 
