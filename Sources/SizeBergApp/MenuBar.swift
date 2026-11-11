@@ -13,7 +13,8 @@ final class DiskWatcher {
     /// How soon a scan that failed is tried again.
     static let retryInterval: TimeInterval = 60 * 60
 
-    private(set) var volume = VolumeInfo.current()
+    /// Nil until the first reading. Reading it can take a while on a busy disk, so it never happens on the main thread.
+    private(set) var volume: VolumeInfo?
 
     private let model: ScanModel
     private var watch = DiskWatch()
@@ -22,6 +23,7 @@ final class DiskWatcher {
     private var lastScanAttempt = Date.distantPast
     /// A warning asked for a scan that could not start yet, for example under an open cleanup sheet.
     private var scanWanted = false
+    private var volumeReading: Task<Void, Never>?
 
     init(model: ScanModel) {
         self.model = model
@@ -33,17 +35,18 @@ final class DiskWatcher {
         }
         // Lets macOS line this wake-up up with others.
         timer?.tolerance = 60
+        Task { await self.readVolume() }
         // Late enough for the window to be up at a normal launch, so its own scan with progress runs instead.
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { self.check() }
     }
 
     var isLow: Bool {
-        volume.availableShare < DiskWatch.lowShare
+        (volume?.availableShare ?? 1) < DiskWatch.lowShare
     }
 
     var iconState: IcebergIcon.State {
         if isLow { return .almostFull }
-        return volume.availableShare < DiskWatch.tightShare ? .tight : .roomy
+        return (volume?.availableShare ?? 1) < DiskWatch.tightShare ? .tight : .roomy
     }
 
     /// A minimized window or a hidden app still counts: `isVisible` is false for both.
@@ -59,8 +62,30 @@ final class DiskWatcher {
         }
     }
 
+    /// A check that comes while a reading is still running waits for it: a second reading would add more
+    /// work on a disk that is already slow, and could finish first and be replaced by the older one.
+    private func readVolume() async {
+        if let reading = volumeReading {
+            await reading.value
+            return
+        }
+        let reading = Task {
+            volume = await Task.detached(priority: .utility) { VolumeInfo.current() }.value
+        }
+        volumeReading = reading
+        await reading.value
+        volumeReading = nil
+    }
+
     private func check() {
-        volume = VolumeInfo.current()
+        Task {
+            await readVolume()
+            evaluate()
+        }
+    }
+
+    private func evaluate() {
+        guard let volume else { return }
         let events = watch.record(freeBytes: volume.availableBytes, totalBytes: volume.totalBytes)
         events.forEach(warn)
         if !events.isEmpty {
@@ -170,14 +195,20 @@ struct MenuBarContent: View {
         .frame(width: 300)
     }
 
+    @ViewBuilder
     private var freeSpace: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("\(bytes(watcher.volume.availableBytes)) free of \(bytes(watcher.volume.totalBytes))")
-                .font(.headline)
-                .monospacedDigit()
-                .foregroundStyle(watcher.isLow ? GroupReport.localWorkColor : Color.primary)
-            ProgressView(value: 1 - watcher.volume.availableShare)
-                .tint(watcher.isLow ? GroupReport.localWorkColor : .accentColor)
+        if let volume = watcher.volume {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(bytes(volume.availableBytes)) free of \(bytes(volume.totalBytes))")
+                    .font(.headline)
+                    .monospacedDigit()
+                    .foregroundStyle(watcher.isLow ? GroupReport.localWorkColor : Color.primary)
+                ProgressView(value: 1 - volume.availableShare)
+                    .tint(watcher.isLow ? GroupReport.localWorkColor : .accentColor)
+            }
+        } else {
+            Text("Reading free space…")
+                .foregroundStyle(.secondary)
         }
     }
 

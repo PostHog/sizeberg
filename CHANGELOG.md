@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The menu bar reads free space off the main thread. On a busy disk the reading can take a moment, and the menu and window froze for that long, at start and every 5 minutes.
+
 ## 0.1.9
 
 - SizeBerg now lives in the menu bar. It keeps running after the window closes, with a Dock icon only while the window is open, and starts at login (remove it in System Settings if you do not want that). The menu shows free space, what can go, and when it last scanned.
