@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- SizeBerg now lives in the menu bar. It keeps running after the window closes, with a Dock icon only while the window is open, and starts at login (remove it in System Settings if you do not want that). The menu shows free space, what can go, and when it last scanned.
+- Two warnings, with fixed thresholds: free space under 10% or dropping 20 GB within an hour, and temp and agent folders growing 20 GB between scans. Each says how much SizeBerg can free.
+- Scans without the window run about every 6 hours, or right after free space drops, as a separate low-priority process that gives its memory back when it exits.
 - Rescans are incremental again. Since 0.1.8, thousands of temp folders made the change query fail, so every scan read everything.
 
 ## 0.1.8

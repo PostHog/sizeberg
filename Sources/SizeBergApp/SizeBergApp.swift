@@ -1,12 +1,29 @@
 import AppKit
+import ServiceManagement
+import SizeBergCore
 import SwiftUI
+import UserNotifications
 
 @main
 struct SizeBergApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @State private var model = ScanModel()
+    @State private var model: ScanModel
+    @State private var watcher: DiskWatcher
+
+    init() {
+        let model = ScanModel()
+        _model = State(initialValue: model)
+        _watcher = State(initialValue: DiskWatcher(model: model))
+    }
 
     var body: some Scene {
+        MenuBarExtra {
+            MenuBarContent(watcher: watcher, model: model)
+        } label: {
+            MenuBarLabel(watcher: watcher)
+        }
+        .menuBarExtraStyle(.window)
+
         // One window: every view shows the same scan, so a second window would only repeat it.
         Window("SizeBerg", id: "main") {
             ContentView()
@@ -56,7 +73,8 @@ struct SizeBergApp: App {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+
     func applicationWillFinishLaunching(_ notification: Notification) {
         // A bare SwiftPM binary starts as a background process; this gives it a Dock icon and focus.
         NSApp.setActivationPolicy(.regular)
@@ -66,8 +84,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// The system marks the launch event of a login item.
+    private static var isLoginLaunch: Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent else { return false }
+        return event.eventID == kAEOpenApplication
+            && event.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+    }
+
+    /// Adds the login item once. If someone removes it in System Settings, it stays removed.
+    private static func registerLoginItemOnce() {
+        let key = "registeredLoginItem"
+        guard Bundle.main.bundlePath.hasPrefix("/Applications/"), !UserDefaults.standard.bool(forKey: key) else { return }
+        // Only after it worked, so a failure is tried again at the next launch.
+        guard (try? SMAppService.mainApp.register()) != nil else { return }
+        UserDefaults.standard.set(true, forKey: key)
+    }
+
+    /// The Dock icon stays only while the window is open; the menu bar item remains.
+    @objc private func windowWillClose(_ notification: Notification) {
+        guard let closing = notification.object as? NSWindow, closing.canBecomeMain else { return }
+        DispatchQueue.main.async {
+            if !DiskWatcher.windowIsOpen {
+                NSApp.setActivationPolicy(.accessory)
+            }
+        }
+    }
+
+    /// Without this, macOS drops a warning that arrives while SizeBerg is in front.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
+    }
+
+    /// Opening SizeBerg from Finder or Spotlight while it runs in the menu bar brings the window back.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            NotificationCenter.default.post(name: .showMainWindow, object: nil)
+        }
+        return true
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        await MainActor.run { NotificationCenter.default.post(name: .showMainWindow, object: nil) }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.activate(ignoringOtherApps: true)
+        NotificationCenter.default.addObserver(self, selector: #selector(windowWillClose), name: NSWindow.willCloseNotification, object: nil)
+        if Bundle.main.bundleIdentifier != nil {
+            UNUserNotificationCenter.current().delegate = self
+        }
+        Self.registerLoginItemOnce()
+        // The launch event is only there from now on, not in applicationWillFinishLaunching.
+        if Self.isLoginLaunch {
+            // Started at login, SizeBerg stays in the menu bar until someone opens the window.
+            // SwiftUI opens the window on every launch, so it is closed again here.
+            NSApp.setActivationPolicy(.accessory)
+            DispatchQueue.main.async {
+                NSApp.windows.filter(\.canBecomeMain).forEach { $0.close() }
+            }
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
         // Starts the daily update check of Developer ID builds.
         _ = Updates.shared
         if let path = ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT"] {
@@ -97,6 +173,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+        false
     }
 }
