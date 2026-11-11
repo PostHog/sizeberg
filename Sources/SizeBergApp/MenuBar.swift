@@ -20,6 +20,8 @@ final class DiskWatcher {
     private var timer: Timer?
     /// A scan that fails leaves the report old, and must not be retried on every check.
     private var lastScanAttempt = Date.distantPast
+    /// A warning asked for a scan that could not start yet, for example under an open cleanup sheet.
+    private var scanWanted = false
 
     init(model: ScanModel) {
         self.model = model
@@ -61,10 +63,13 @@ final class DiskWatcher {
         volume = VolumeInfo.current()
         let events = watch.record(freeBytes: volume.availableBytes, totalBytes: volume.totalBytes)
         events.forEach(warn)
+        if !events.isEmpty {
+            scanWanted = true
+        }
         // A scan would replace the report under an open cleanup sheet.
         guard model.cleanup == nil, Date().timeIntervalSince(lastScanAttempt) > Self.checkInterval else { return }
         let retryIsDue = Date().timeIntervalSince(lastScanAttempt) > Self.retryInterval
-        if !events.isEmpty || (model.reportAge > DiskWatch.scanInterval && retryIsDue) {
+        if scanWanted || (model.reportAge > DiskWatch.scanInterval && retryIsDue) {
             scanInBackground()
         }
     }
@@ -72,6 +77,7 @@ final class DiskWatcher {
     private func scanInBackground() {
         guard !model.isBusy else { return }
         lastScanAttempt = Date()
+        scanWanted = false
         model.scanInBackground()
     }
 
