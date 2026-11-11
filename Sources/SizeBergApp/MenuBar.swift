@@ -12,8 +12,6 @@ final class DiskWatcher {
     static let checkInterval: TimeInterval = 5 * 60
 
     private(set) var volume = Report.currentVolume()
-    /// Changes on every check, so "Scanned 2 hours ago" in the menu is redrawn with it.
-    private(set) var checkedAt = Date()
     /// Opens the main window. The menu bar label sets it: only a SwiftUI view can reach openWindow.
     var openMainWindow: (() -> Void)?
 
@@ -62,7 +60,6 @@ final class DiskWatcher {
 
     private func check() {
         volume = Report.currentVolume()
-        checkedAt = Date()
         let events = watch.record(freeBytes: freeBytes, totalBytes: volume.totalBytes)
         events.forEach(warn)
         let isOld = model.report.map { Date().timeIntervalSince($0.scannedAt) > DiskWatch.scanInterval } ?? true
@@ -125,36 +122,66 @@ struct MenuBarLabel: View {
     }
 }
 
-/// The menu: a plain system menu with free space, what can go, and the few actions there are.
+/// What opens from the menu bar: free space, what can go, and the few actions there are.
 struct MenuBarContent: View {
     let watcher: DiskWatcher
     let model: ScanModel
 
     var body: some View {
-        Text("\(bytes(watcher.freeBytes)) free of \(bytes(watcher.volume.totalBytes))")
-        if let report = model.report {
-            let summary = report.reclaimable
-            Section("Can free about \(bytes(summary.totalBytes))") {
-                Text("Stale worktrees and stores: \(bytes(summary.staleBytes))")
-                Text("Agent waste: \(bytes(summary.agentWasteBytes))")
-                Text("Build output and caches: \(bytes(summary.buildOutputBytes))")
+        VStack(alignment: .leading, spacing: 12) {
+            freeSpace
+            if let report = model.report {
+                Divider()
+                reclaimable(report.reclaimable)
+                Divider()
+                Text(model.isBusy ? "Scanning…" : "Scanned \(report.scannedAt.formatted(.relative(presentation: .named)))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            Divider()
-            Text(scanLine(report))
+            HStack {
+                Button("Open SizeBerg") { watcher.showWindow() }
+                    .keyboardShortcut(.defaultAction)
+                Button("Scan Now") { watcher.scanNow() }
+                    .disabled(model.isBusy)
+                Spacer()
+                Button("Quit") { NSApp.terminate(nil) }
+            }
         }
-        Divider()
-        Button("Open SizeBerg") { watcher.showWindow() }
-            .keyboardShortcut("o")
-        Button("Scan Now") { watcher.scanNow() }
-            .keyboardShortcut("r")
-            .disabled(model.isBusy)
-        Divider()
-        Button("Quit SizeBerg") { NSApp.terminate(nil) }
-            .keyboardShortcut("q")
+        .padding(14)
+        .frame(width: 300)
     }
 
-    private func scanLine(_ report: Report) -> String {
-        _ = watcher.checkedAt
-        return model.isBusy ? "Scanning…" : "Scanned \(report.scannedAt.formatted(.relative(presentation: .named)))"
+    private var freeSpace: some View {
+        let total = max(watcher.volume.totalBytes, 1)
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("\(bytes(watcher.freeBytes)) free of \(bytes(watcher.volume.totalBytes))")
+                .font(.headline)
+                .monospacedDigit()
+                .foregroundStyle(watcher.isLow ? AnyShapeStyle(GroupReport.localWorkColor) : AnyShapeStyle(.primary))
+            ProgressView(value: Double(total - watcher.freeBytes), total: Double(total))
+                .tint(watcher.isLow ? GroupReport.localWorkColor : .accentColor)
+        }
+    }
+
+    private func reclaimable(_ summary: ReclaimableSummary) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Can free about \(bytes(summary.totalBytes))")
+                .font(.headline)
+                .monospacedDigit()
+            line("Stale worktrees and stores", summary.staleBytes)
+            line("Agent waste", summary.agentWasteBytes)
+            line("Build output and caches", summary.buildOutputBytes)
+        }
+    }
+
+    private func line(_ title: String, _ value: Int64) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(bytes(value))
+                .monospacedDigit()
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
     }
 }
