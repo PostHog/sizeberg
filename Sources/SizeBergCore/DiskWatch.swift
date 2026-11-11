@@ -9,6 +9,8 @@ import Foundation
 /// - Agent waste growth: temp folders and agent scratch grew by `wasteGrowthBytes` between two scans.
 public struct DiskWatch: Sendable {
     public static let lowShare = 0.10
+    /// Under this the menu bar icon turns solid: not a warning yet, but worth a glance.
+    public static let tightShare = 0.25
     public static let recoveredShare = 0.12
     public static let fastDropBytes: Int64 = 20_000_000_000
     public static let fastDropWindow: TimeInterval = 60 * 60
@@ -59,32 +61,24 @@ public struct DiskWatch: Sendable {
 public struct ReclaimableSummary: Equatable, Sendable {
     public var staleBytes: Int64
     public var agentWasteBytes: Int64
+    /// Build output left once the stale items are gone: what they hold is counted with them.
     public var buildOutputBytes: Int64
-    /// Everything in agent waste sections, deletable or not, to notice fast growth between scans.
-    public var agentWasteTotalBytes: Int64
 
     public var totalBytes: Int64 { staleBytes + agentWasteBytes + buildOutputBytes }
 }
 
 extension Report {
     public var reclaimable: ReclaimableSummary {
-        let agentWaste = groups.filter { $0.section != nil }
-        return ReclaimableSummary(
-            staleBytes: freeableBytes(selection: staleSelection),
-            agentWasteBytes: freeableBytes(selection: Set(agentWaste.filter(\.selectable).map(\.id))),
-            buildOutputBytes: trimAllBytes,
-            agentWasteTotalBytes: agentWaste.reduce(0) { $0 + $1.apparentBytes }
-        )
+        let agentWaste = Set(groups.filter { $0.section != nil && $0.selectable }.map(\.id))
+        let stale = freeableBytes(selection: staleSelection)
+        let waste = freeableBytes(selection: agentWaste)
+        let all = freeableBytes(selection: staleSelection.union(agentWaste).union([Report.buildOutputID]))
+        return ReclaimableSummary(staleBytes: stale, agentWasteBytes: waste, buildOutputBytes: max(0, all - stale - waste))
     }
 
-    /// Agent waste that grew by `DiskWatch.wasteGrowthBytes` or more since `earlier`, or nil.
-    public func agentWasteGrowth(since earlier: Report) -> Int64? {
-        let growth = reclaimable.agentWasteTotalBytes - earlier.reclaimable.agentWasteTotalBytes
-        return growth >= DiskWatch.wasteGrowthBytes ? growth : nil
-    }
-
-    /// The volume that holds the home folder, read now.
-    public static func currentVolume() -> VolumeInfo {
-        Scanner.volume(NSHomeDirectory())
+    /// Real disk use of everything in agent waste sections, to notice fast growth between scans.
+    /// Not `apparentBytes`: copy-on-write clones count at full size there and use almost no disk.
+    public var agentWasteTotalBytes: Int64 {
+        groups.filter { $0.section != nil }.reduce(0) { $0 + $1.freeableAloneBytes }
     }
 }

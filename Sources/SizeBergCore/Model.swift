@@ -191,6 +191,16 @@ public struct VolumeInfo: Codable, Sendable {
     public var totalBytes: Int64
     public var freeBytes: Int64
     public var availableForImportantUsageBytes: Int64?
+
+    /// What a new file can really use: purgeable space counts, unlike in `freeBytes`.
+    public var availableBytes: Int64 { availableForImportantUsageBytes ?? freeBytes }
+    /// 1 when the size is unknown, so an unreadable volume never reads as full.
+    public var availableShare: Double { totalBytes > 0 ? Double(availableBytes) / Double(totalBytes) : 1 }
+
+    /// The volume that holds the home folder, read now.
+    public static func current() -> VolumeInfo {
+        Scanner.volume(NSHomeDirectory())
+    }
 }
 
 public struct Report: Codable, Sendable {

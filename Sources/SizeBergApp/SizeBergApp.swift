@@ -21,7 +21,6 @@ struct SizeBergApp: App {
             MenuBarContent(watcher: watcher, model: model)
         } label: {
             MenuBarLabel(watcher: watcher)
-                .onAppear { appDelegate.watcher = watcher }
         }
         .menuBarExtraStyle(.window)
 
@@ -75,15 +74,10 @@ struct SizeBergApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
-    /// Set by the menu bar label, for opening the window from a notification.
-    var watcher: DiskWatcher?
-    private var launchedAtLogin = false
 
     func applicationWillFinishLaunching(_ notification: Notification) {
-        launchedAtLogin = Self.isLoginLaunch
         // A bare SwiftPM binary starts as a background process; this gives it a Dock icon and focus.
-        // Started at login, SizeBerg stays in the menu bar until someone opens the window.
-        NSApp.setActivationPolicy(launchedAtLogin ? .accessory : .regular)
+        NSApp.setActivationPolicy(.regular)
         // Debug aid for SIZEBERG_SNAPSHOT: check the dark appearance without changing the system setting.
         if ProcessInfo.processInfo.environment["SIZEBERG_APPEARANCE"] == "dark" {
             NSApp.appearance = NSAppearance(named: .darkAqua)
@@ -115,8 +109,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    /// Without this, macOS drops a warning that arrives while SizeBerg is in front.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
+    }
+
+    /// Opening SizeBerg from Finder or Spotlight while it runs in the menu bar brings the window back.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            NotificationCenter.default.post(name: .showMainWindow, object: nil)
+        }
+        return true
+    }
+
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        await MainActor.run { watcher?.showWindow() }
+        await MainActor.run { NotificationCenter.default.post(name: .showMainWindow, object: nil) }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -125,8 +132,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             UNUserNotificationCenter.current().delegate = self
         }
         Self.registerLoginItemOnce()
-        if launchedAtLogin {
-            // SwiftUI opens the window on every launch; at login it should not appear.
+        // The launch event is only there from now on, not in applicationWillFinishLaunching.
+        if Self.isLoginLaunch {
+            // Started at login, SizeBerg stays in the menu bar until someone opens the window.
+            // SwiftUI opens the window on every launch, so it is closed again here.
+            NSApp.setActivationPolicy(.accessory)
             DispatchQueue.main.async {
                 NSApp.windows.filter(\.canBecomeMain).forEach { $0.close() }
             }

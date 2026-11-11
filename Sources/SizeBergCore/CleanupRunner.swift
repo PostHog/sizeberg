@@ -317,6 +317,6 @@ public enum CleanupRunner {
 
     /// Free bytes on the volume that holds the home folder, for before and after.
     public static func freeBytes() -> Int64 {
-        Scanner.volume(NSHomeDirectory()).freeBytes
+        VolumeInfo.current().freeBytes
     }
 }

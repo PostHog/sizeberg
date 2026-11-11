@@ -34,4 +34,21 @@ struct DiskWatchTests {
         #expect(fast == [.fastDrop(bytes: 30 * Self.gigabyte, minutes: 55)])
         #expect(after.isEmpty)
     }
+
+    /// Build output inside a stale worktree goes with the worktree. Counting it twice would promise
+    /// more in the menu than a cleanup frees.
+    @Test func reclaimableCountsBuildOutputInStaleWorktreesOnce() {
+        let git = GitInfo(repoPath: "/repo", branch: "old", headDate: nil, lastActive: nil, upstreamGone: false, mergedIntoDefault: true,
+                          hasUncommittedChanges: false, hasUnpushedCommits: false, status: .stale)
+        let build = BucketReport(kind: .buildOutput, apparentBytes: 10 * Self.gigabyte, privateBytes: 10 * Self.gigabyte, freeableAloneBytes: 10 * Self.gigabyte, fileCount: 1,
+                                 folders: [BuildFolder(path: "/repo/old/target", bytes: 10 * Self.gigabyte)], foldersFreeBytes: 10 * Self.gigabyte)
+        let stale = GroupReport(id: 0, kind: .worktree, name: "old", paths: ["/repo/old"], git: git, buckets: [build],
+                                apparentBytes: 10 * Self.gigabyte, privateBytes: 10 * Self.gigabyte, freeableAloneBytes: 10 * Self.gigabyte,
+                                selectable: true, cleanupCommand: "git worktree remove", note: nil)
+        let report = Report(scannedAt: Self.start, durationSeconds: 1, roots: [], fileCount: 1, errorCount: 0,
+                            volume: VolumeInfo(totalBytes: Self.total, freeBytes: 0, availableForImportantUsageBytes: nil),
+                            localSnapshots: [], groups: [stale], sharedSets: [])
+
+        #expect(report.reclaimable.totalBytes == 10 * Self.gigabyte)
+    }
 }

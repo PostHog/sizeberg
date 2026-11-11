@@ -4,50 +4,44 @@ import SwiftUI
 import UserNotifications
 
 /// Keeps an eye on the disk while SizeBerg runs. Reading free space costs nothing, so it happens often;
-/// scans are rare, run as a separate low-priority process, and never while the window is open, where
-/// the window's own scans keep the numbers current.
+/// scans are rare and run as a separate low-priority process. They also run with the window open, since
+/// a window left behind other apps for days would otherwise stop them.
 @MainActor
 @Observable
 final class DiskWatcher {
     static let checkInterval: TimeInterval = 5 * 60
 
-    private(set) var volume = Report.currentVolume()
-    /// Opens the main window. The menu bar label sets it: only a SwiftUI view can reach openWindow.
-    var openMainWindow: (() -> Void)?
+    private(set) var volume = VolumeInfo.current()
 
     private let model: ScanModel
     private var watch = DiskWatch()
     private var timer: Timer?
+    /// A scan that fails leaves the report old, and must not be retried on every check.
+    private var lastScanAttempt = Date.distantPast
 
     init(model: ScanModel) {
         self.model = model
         timer = Timer.scheduledTimer(withTimeInterval: Self.checkInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.check() }
         }
+        // Lets macOS line this wake-up up with others.
+        timer?.tolerance = 60
         // Late enough for the window to be up at a normal launch, so its own scan with progress runs instead.
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { self.check() }
     }
 
-    var freeBytes: Int64 {
-        volume.availableForImportantUsageBytes ?? volume.freeBytes
-    }
-
     var isLow: Bool {
-        volume.totalBytes > 0 && Double(freeBytes) / Double(volume.totalBytes) < DiskWatch.lowShare
+        volume.availableShare < DiskWatch.lowShare
     }
 
-    var usedShare: Double {
-        volume.totalBytes > 0 ? 1 - Double(freeBytes) / Double(volume.totalBytes) : 0
+    var iconState: IcebergIcon.State {
+        if isLow { return .almostFull }
+        return volume.availableShare < DiskWatch.tightShare ? .tight : .roomy
     }
 
+    /// A minimized window or a hidden app still counts: `isVisible` is false for both.
     static var windowIsOpen: Bool {
-        NSApp.windows.contains { $0.isVisible && $0.canBecomeMain }
-    }
-
-    func showWindow() {
-        NSApp.setActivationPolicy(.regular)
-        openMainWindow?()
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.windows.contains { $0.canBecomeMain && ($0.isVisible || $0.isMiniaturized || NSApp.isHidden) }
     }
 
     func scanNow() {
@@ -59,19 +53,25 @@ final class DiskWatcher {
     }
 
     private func check() {
-        volume = Report.currentVolume()
-        let events = watch.record(freeBytes: freeBytes, totalBytes: volume.totalBytes)
+        volume = VolumeInfo.current()
+        let events = watch.record(freeBytes: volume.availableBytes, totalBytes: volume.totalBytes)
         events.forEach(warn)
-        let isOld = model.report.map { Date().timeIntervalSince($0.scannedAt) > DiskWatch.scanInterval } ?? true
-        if !events.isEmpty || isOld, !Self.windowIsOpen {
+        // A scan would replace the report under an open cleanup sheet.
+        guard model.cleanup == nil, Date().timeIntervalSince(lastScanAttempt) > Self.checkInterval else { return }
+        let retryIsDue = Date().timeIntervalSince(lastScanAttempt) > DiskWatch.scanInterval
+        if !events.isEmpty || (model.reportAge > DiskWatch.scanInterval && retryIsDue) {
             scanInBackground()
         }
     }
 
     private func scanInBackground() {
-        let earlier = model.report
+        guard !model.isBusy else { return }
+        lastScanAttempt = Date()
+        let earlierTotal = model.report?.agentWasteTotalBytes
         model.scanInBackground { [weak self] report in
-            guard let self, let earlier, let growth = report.agentWasteGrowth(since: earlier) else { return }
+            guard let self, let earlierTotal else { return }
+            let growth = report.agentWasteTotalBytes - earlierTotal
+            guard growth >= DiskWatch.wasteGrowthBytes else { return }
             self.notify(
                 title: "Temp folders are growing fast",
                 body: "Agent and temp folders grew \(bytes(growth)) since the last scan. \(self.canFreeText)"
@@ -108,16 +108,23 @@ final class DiskWatcher {
     }
 }
 
-/// The icon in the menu bar. It is always drawn, so it also hands openWindow to the watcher.
+extension Notification.Name {
+    /// Asks for the main window, from places without a SwiftUI environment such as a clicked notification.
+    static let showMainWindow = Notification.Name("SizeBergShowMainWindow")
+}
+
+/// The icon in the menu bar. It is always drawn, so it is also what opens the window on request.
 struct MenuBarLabel: View {
     let watcher: DiskWatcher
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Image(nsImage: IcebergIcon.image(usedShare: watcher.usedShare, isLow: watcher.isLow))
+        Image(nsImage: IcebergIcon.image(watcher.iconState))
             .accessibilityLabel(watcher.isLow ? "SizeBerg: disk almost full" : "SizeBerg")
-            .onAppear {
-                watcher.openMainWindow = { openWindow(id: "main") }
+            .onReceive(NotificationCenter.default.publisher(for: .showMainWindow)) { _ in
+                NSApp.setActivationPolicy(.regular)
+                openWindow(id: "main")
+                NSApp.activate(ignoringOtherApps: true)
             }
     }
 }
@@ -139,7 +146,7 @@ struct MenuBarContent: View {
                     .foregroundStyle(.secondary)
             }
             HStack {
-                Button("Open SizeBerg") { watcher.showWindow() }
+                Button("Open SizeBerg") { NotificationCenter.default.post(name: .showMainWindow, object: nil) }
                     .keyboardShortcut(.defaultAction)
                 Button("Scan Now") { watcher.scanNow() }
                     .disabled(model.isBusy)
@@ -152,13 +159,12 @@ struct MenuBarContent: View {
     }
 
     private var freeSpace: some View {
-        let total = max(watcher.volume.totalBytes, 1)
-        return VStack(alignment: .leading, spacing: 4) {
-            Text("\(bytes(watcher.freeBytes)) free of \(bytes(watcher.volume.totalBytes))")
+        VStack(alignment: .leading, spacing: 4) {
+            Text("\(bytes(watcher.volume.availableBytes)) free of \(bytes(watcher.volume.totalBytes))")
                 .font(.headline)
                 .monospacedDigit()
-                .foregroundStyle(watcher.isLow ? AnyShapeStyle(GroupReport.localWorkColor) : AnyShapeStyle(.primary))
-            ProgressView(value: Double(total - watcher.freeBytes), total: Double(total))
+                .foregroundStyle(watcher.isLow ? GroupReport.localWorkColor : Color.primary)
+            ProgressView(value: 1 - watcher.volume.availableShare)
                 .tint(watcher.isLow ? GroupReport.localWorkColor : .accentColor)
         }
     }

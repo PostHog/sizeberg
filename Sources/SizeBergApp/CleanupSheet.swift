@@ -120,7 +120,7 @@ struct CleanupSheet: View {
             Spacer()
             switch session.phase {
             case .confirm:
-                if model.isScanning {
+                if model.isAnyScanRunning {
                     // Says why Delete waits, instead of a silently disabled button.
                     ProgressView().controlSize(.small)
                     Text("Waiting for the scan to finish")
@@ -134,7 +134,7 @@ struct CleanupSheet: View {
                 }
                 .prominentButtonStyle()
                 .tint(.red)
-                .disabled(session.items.isEmpty || model.isScanning)
+                .disabled(session.items.isEmpty || model.isAnyScanRunning)
             case .running:
                 Button("Done") {}
                     .disabled(true)

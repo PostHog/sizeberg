@@ -96,15 +96,23 @@ final class ScanModel {
 
     static let freshFor: TimeInterval = 5 * 60
 
+    /// How old the numbers are. Infinite before the first scan, so that one always counts as due.
+    var reportAge: TimeInterval {
+        report.map { Date().timeIntervalSince($0.scannedAt) } ?? .infinity
+    }
+
     private func rescanIfOld() {
-        guard cleanup == nil else { return }
-        if let report, Date().timeIntervalSince(report.scannedAt) <= Self.freshFor { return }
+        guard cleanup == nil, reportAge > Self.freshFor else { return }
         scan()
     }
 
     /// A scan or a cleanup is running: scanning while folders are deleted would report a half state.
     var isBusy: Bool {
-        isScanning || isBackgroundScanning || cleanup?.phase == .running
+        isAnyScanRunning || cleanup?.phase == .running
+    }
+
+    var isAnyScanRunning: Bool {
+        isScanning || isBackgroundScanning
     }
 
     /// Scans in a separate low-priority process, which gives its memory back when it exits. Both write
@@ -113,28 +121,37 @@ final class ScanModel {
         guard !isBusy else { return }
         isBackgroundScanning = true
         Task {
-            await Task.detached(priority: .background) { Self.runScanHelper() }.value
+            let scanned = await Task.detached(priority: .background) {
+                await Self.runScanHelper()
+                return Report.loadCached()
+            }.value
             isBackgroundScanning = false
-            guard let report = Report.loadCached() else { return }
+            guard let report = scanned else { return }
             finish(with: report)
             finished(report)
         }
     }
 
-    private nonisolated static func runScanHelper() {
-        let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/sizeberg")
-        guard FileManager.default.isExecutableFile(atPath: helper.path) else {
-            // Run from `swift run`, without an app bundle.
-            try? Scanner().run().saveToCache()
-            return
-        }
+    private nonisolated static let helperTimeout: TimeInterval = 60 * 60
+
+    private nonisolated static func runScanHelper() async {
         let process = Process()
-        process.executableURL = helper
+        process.executableURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/sizeberg")
         process.qualityOfService = .background
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return }
-        process.waitUntilExit()
+        await withCheckedContinuation { (finished: CheckedContinuation<Void, Never>) in
+            process.terminationHandler = { _ in finished.resume() }
+            // Outside an app bundle there is no helper, and the handler never fires.
+            guard (try? process.run()) != nil else {
+                finished.resume()
+                return
+            }
+            // A stuck helper would otherwise keep every scan and cleanup blocked until the app quits.
+            DispatchQueue.global().asyncAfter(deadline: .now() + helperTimeout) {
+                if process.isRunning { process.terminate() }
+            }
+        }
     }
 
     func scan(full: Bool = false) {
@@ -329,7 +346,7 @@ final class ScanModel {
     /// Runs the steps one after another, off the main thread, and measures free space around them.
     func runCleanup() {
         // Deleting while a scan reads the same folders would leave the report half old, half new.
-        guard var session = cleanup, session.phase == .confirm, !isScanning else { return }
+        guard var session = cleanup, session.phase == .confirm, !isAnyScanRunning else { return }
         session.phase = .running
         session.freeBefore = CleanupRunner.freeBytes()
         cleanup = session
