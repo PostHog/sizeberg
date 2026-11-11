@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.10
 
 - The menu bar reads free space off the main thread. On a busy disk the reading can take a moment, and the menu and window froze for that long, at start and every 5 minutes.
 
