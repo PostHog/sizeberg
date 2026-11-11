@@ -23,6 +23,7 @@ final class DiskWatcher {
     private var lastScanAttempt = Date.distantPast
     /// A warning asked for a scan that could not start yet, for example under an open cleanup sheet.
     private var scanWanted = false
+    private var volumeReading: Task<Void, Never>?
 
     init(model: ScanModel) {
         self.model = model
@@ -61,8 +62,19 @@ final class DiskWatcher {
         }
     }
 
+    /// A check that comes while a reading is still running waits for it: a second reading would add more
+    /// work on a disk that is already slow, and could finish first and be replaced by the older one.
     private func readVolume() async {
-        volume = await Task.detached(priority: .utility) { VolumeInfo.current() }.value
+        if let reading = volumeReading {
+            await reading.value
+            return
+        }
+        let reading = Task {
+            volume = await Task.detached(priority: .utility) { VolumeInfo.current() }.value
+        }
+        volumeReading = reading
+        await reading.value
+        volumeReading = nil
     }
 
     private func check() {
