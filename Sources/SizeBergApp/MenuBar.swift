@@ -10,6 +10,8 @@ import UserNotifications
 @Observable
 final class DiskWatcher {
     static let checkInterval: TimeInterval = 5 * 60
+    /// How soon a scan that failed is tried again.
+    static let retryInterval: TimeInterval = 60 * 60
 
     private(set) var volume = VolumeInfo.current()
 
@@ -21,6 +23,9 @@ final class DiskWatcher {
 
     init(model: ScanModel) {
         self.model = model
+        model.scanFinished = { [weak self] previous, report in
+            MainActor.assumeIsolated { self?.warnAboutGrowth(from: previous, to: report) }
+        }
         timer = Timer.scheduledTimer(withTimeInterval: Self.checkInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.check() }
         }
@@ -58,7 +63,7 @@ final class DiskWatcher {
         events.forEach(warn)
         // A scan would replace the report under an open cleanup sheet.
         guard model.cleanup == nil, Date().timeIntervalSince(lastScanAttempt) > Self.checkInterval else { return }
-        let retryIsDue = Date().timeIntervalSince(lastScanAttempt) > DiskWatch.scanInterval
+        let retryIsDue = Date().timeIntervalSince(lastScanAttempt) > Self.retryInterval
         if !events.isEmpty || (model.reportAge > DiskWatch.scanInterval && retryIsDue) {
             scanInBackground()
         }
@@ -67,16 +72,17 @@ final class DiskWatcher {
     private func scanInBackground() {
         guard !model.isBusy else { return }
         lastScanAttempt = Date()
-        let earlierTotal = model.report?.agentWasteTotalBytes
-        model.scanInBackground { [weak self] report in
-            guard let self, let earlierTotal else { return }
-            let growth = report.agentWasteTotalBytes - earlierTotal
-            guard growth >= DiskWatch.wasteGrowthBytes else { return }
-            self.notify(
-                title: "Temp folders are growing fast",
-                body: "Agent and temp folders grew \(bytes(growth)) since the last scan. \(self.canFreeText)"
-            )
-        }
+        model.scanInBackground()
+    }
+
+    private func warnAboutGrowth(from previous: Report?, to report: Report) {
+        guard let previous else { return }
+        let growth = report.agentWasteTotalBytes - previous.agentWasteTotalBytes
+        guard growth >= DiskWatch.wasteGrowthBytes else { return }
+        notify(
+            title: "Temp folders are growing fast",
+            body: "Agent and temp folders grew \(bytes(growth)) since the last scan. \(canFreeText)"
+        )
     }
 
     private func warn(_ event: DiskWatch.Event) {

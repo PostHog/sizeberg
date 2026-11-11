@@ -95,8 +95,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private static func registerLoginItemOnce() {
         let key = "registeredLoginItem"
         guard Bundle.main.bundlePath.hasPrefix("/Applications/"), !UserDefaults.standard.bool(forKey: key) else { return }
+        // Only after it worked, so a failure is tried again at the next launch.
+        guard (try? SMAppService.mainApp.register()) != nil else { return }
         UserDefaults.standard.set(true, forKey: key)
-        try? SMAppService.mainApp.register()
     }
 
     /// The Dock icon stays only while the window is open; the menu bar item remains.

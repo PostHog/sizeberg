@@ -51,4 +51,18 @@ struct DiskWatchTests {
 
         #expect(report.reclaimable.totalBytes == 10 * Self.gigabyte)
     }
+
+    /// Summing each item's own blocks would drop what two items share, so regrouping the same sessions
+    /// would look like growth.
+    @Test func agentWasteTotalCountsSharedBlocksOnce() {
+        func item(_ id: Int) -> GroupReport {
+            GroupReport(id: id, kind: .cache, name: "session", paths: ["/tmp/\(id)"], git: nil, buckets: [], apparentBytes: 25 * Self.gigabyte,
+                        privateBytes: 0, freeableAloneBytes: 0, selectable: true, cleanupCommand: "rm", note: nil, section: .scratchpads)
+        }
+        let report = Report(scannedAt: Self.start, durationSeconds: 1, roots: [], fileCount: 2, errorCount: 0,
+                            volume: VolumeInfo(totalBytes: Self.total, freeBytes: 0, availableForImportantUsageBytes: nil), localSnapshots: [],
+                            groups: [item(0), item(1)], sharedSets: [SharedSet(groupIDs: [0, 1], bytes: 25 * Self.gigabyte, familyCount: 1)])
+
+        #expect(report.agentWasteTotalBytes == 25 * Self.gigabyte)
+    }
 }

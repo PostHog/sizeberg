@@ -48,6 +48,10 @@ final class ScanModel {
     private(set) var report: Report?
     private(set) var isScanning = false
     private(set) var isBackgroundScanning = false
+    /// Kept to stop it on quit: a helper left running would write the same cache as the next scan.
+    private var scanHelper: Process?
+    /// Called after every finished scan, in the window or in the background, with the report it replaced.
+    var scanFinished: ((_ previous: Report?, _ report: Report) -> Void)?
     /// A full scan shows the live table over the old report, with the old numbers for comparison.
     private(set) var isFullScan = false
     /// Live totals of the running scan. Nil when no scan runs.
@@ -71,6 +75,12 @@ final class ScanModel {
     private(set) var deletedIDs: Set<Int> = []
 
     init() {
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.scanHelper?.terminate()
+                self?.scanHelper?.waitUntilExit()
+            }
+        }
         // Debug aid for SIZEBERG_SNAPSHOT: "first" scans without a report, "full" runs a full scan over the last one.
         let snapshotScan = ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT_SCAN"]
         if snapshotScan == "first" {
@@ -117,34 +127,41 @@ final class ScanModel {
 
     /// Scans in a separate low-priority process, which gives its memory back when it exits. Both write
     /// the same cache, so this never runs next to a scan in the window.
-    func scanInBackground(then finished: @escaping @MainActor (Report) -> Void) {
+    func scanInBackground() {
         guard !isBusy else { return }
         isBackgroundScanning = true
+        let process = Self.makeScanHelper()
+        scanHelper = process
         Task {
             let scanned = await Task.detached(priority: .background) {
-                await Self.runScanHelper()
-                return Report.loadCached()
+                // A helper that failed left the old report behind, which must not pass for a new scan.
+                await Self.run(process) ? Report.loadCached() : nil
             }.value
+            scanHelper = nil
             isBackgroundScanning = false
             guard let report = scanned else { return }
             finish(with: report)
-            finished(report)
         }
     }
 
     private nonisolated static let helperTimeout: TimeInterval = 60 * 60
 
-    private nonisolated static func runScanHelper() async {
+    private static func makeScanHelper() -> Process {
         let process = Process()
         process.executableURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/sizeberg")
         process.qualityOfService = .background
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        await withCheckedContinuation { (finished: CheckedContinuation<Void, Never>) in
-            process.terminationHandler = { _ in finished.resume() }
+        return process
+    }
+
+    /// True when the helper finished its scan and saved it.
+    private nonisolated static func run(_ process: Process) async -> Bool {
+        await withCheckedContinuation { (finished: CheckedContinuation<Bool, Never>) in
+            process.terminationHandler = { finished.resume(returning: $0.terminationStatus == 0 && $0.terminationReason == .exit) }
             // Outside an app bundle there is no helper, and the handler never fires.
             guard (try? process.run()) != nil else {
-                finished.resume()
+                finished.resume(returning: false)
                 return
             }
             // A stuck helper would otherwise keep every scan and cleanup blocked until the app quits.
@@ -196,6 +213,7 @@ final class ScanModel {
         collapsedRepositories = carry(collapsedRepositories)
         focusedID = focusedID.flatMap { carry([$0]).first }
         self.report = report
+        scanFinished?(previous, report)
         deletedIDs = []
         isScanning = false
         isFullScan = false

@@ -78,7 +78,8 @@ extension Report {
 
     /// Real disk use of everything in agent waste sections, to notice fast growth between scans.
     /// Not `apparentBytes`: copy-on-write clones count at full size there and use almost no disk.
+    /// Blocks shared between these items count once, so regrouping sessions does not change it.
     public var agentWasteTotalBytes: Int64 {
-        groups.filter { $0.section != nil }.reduce(0) { $0 + $1.freeableAloneBytes }
+        freeableBytes(selection: Set(groups.filter { $0.section != nil }.map(\.id)))
     }
 }
