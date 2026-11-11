@@ -134,7 +134,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         Self.registerLoginItemOnce()
         // The launch event is only there from now on, not in applicationWillFinishLaunching.
-        if Self.isLoginLaunch {
+        // The MDM package starts SizeBerg with --menu-bar, the same way.
+        if Self.isLoginLaunch || CommandLine.arguments.contains("--menu-bar") {
             // Started at login, SizeBerg stays in the menu bar until someone opens the window.
             // SwiftUI opens the window on every launch, so it is closed again here.
             NSApp.setActivationPolicy(.accessory)

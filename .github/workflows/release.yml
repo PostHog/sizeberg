@@ -208,6 +208,11 @@ jobs:
                   shasum -a 256 "$ZIP" > "${ZIP}.sha256"
                   cat "${ZIP}.sha256"
                   echo "sha256=$(awk '{print $1}' "${ZIP}.sha256")" >> "$GITHUB_OUTPUT"
+                  # For MDM installs such as Fleet, which install a .pkg, not a zip.
+                  ../pkg/build-pkg.sh SizeBerg.app "$VERSION" .
+                  PKG="SizeBerg-${VERSION}-mac-arm64.pkg"
+                  shasum -a 256 "$PKG" > "${PKG}.sha256"
+                  cat "${PKG}.sha256"
 
             # The feed installed apps read, from the latest release. sign_update comes with the Sparkle
             # package SwiftPM resolved for the build. sparkle:version is CFBundleVersion, which Sparkle
@@ -267,7 +272,8 @@ jobs:
                       *) PRERELEASE=false ;;
                   esac
                   ZIP="build/SizeBerg-${VERSION}-mac-arm64.zip"
-                  ASSETS=("$ZIP" "${ZIP}.sha256")
+                  PKG="build/SizeBerg-${VERSION}-mac-arm64.pkg"
+                  ASSETS=("$ZIP" "${ZIP}.sha256" "$PKG" "${PKG}.sha256")
                   if [ "$SIGNED" = true ]; then
                       ASSETS+=(build/appcast.xml)
                   fi

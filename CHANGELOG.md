@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Releases include `SizeBerg-<version>-mac-arm64.pkg` for MDM installs such as Fleet. It always installs to /Applications, and starts SizeBerg in the menu bar for the person logged in, without opening the window. The package is not signed, since an MDM installs it as root; the app inside is signed and notarized as before.
+
 ## 0.1.9
 
 - SizeBerg now lives in the menu bar. It keeps running after the window closes, with a Dock icon only while the window is open, and starts at login (remove it in System Settings if you do not want that). The menu shows free space, what can go, and when it last scanned.

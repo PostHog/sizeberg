@@ -1,0 +1,15 @@
+#!/bin/bash
+# Runs as root after an MDM such as Fleet installs SizeBerg. Starts it for the person at the Mac, in the
+# menu bar only: a window that opens in the middle of their work would be an interruption, and the
+# first start is also what adds the login item.
+user=$(stat -f %Su /dev/console)
+if [ -z "$user" ] || [ "$user" = root ] || [ "$user" = loginwindow ]; then
+    exit 0
+fi
+uid=$(id -u "$user")
+# A copy that already runs keeps running; it picks up the new version at its next start.
+if pgrep -u "$uid" -x SizeBerg >/dev/null; then
+    exit 0
+fi
+launchctl asuser "$uid" sudo -u "$user" /usr/bin/open -g -a /Applications/SizeBerg.app --args --menu-bar || true
+exit 0

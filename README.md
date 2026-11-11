@@ -37,6 +37,8 @@ See [RELEASING.md](RELEASING.md) for how releases are built, signed and publishe
 
 SizeBerg also lives in the menu bar: it keeps running after the window closes, with a Dock icon only while the window is open, and adds itself to your login items once (remove it in System Settings to stop that). The iceberg is an outline while the disk has room, solid under 25% free, and red under 10%. It warns when free space falls under 10% or drops 20 GB within an hour, and when temp and agent folders grow 20 GB between scans. Without the window it scans about every 6 hours, or right after free space drops, through the bundled CLI at background priority. There are no settings for any of this.
 
+**MDM installs.** Each release also has `SizeBerg-<version>-mac-arm64.pkg` with its `.sha256`. It installs to /Applications even when another copy exists elsewhere, and its postinstall starts SizeBerg with `--menu-bar` for the logged-in user, which skips the window like a login start. Pre-approve access to Documents, Desktop and Downloads with a privacy profile for `com.posthog.sizeberg`, or the first scan asks for each folder.
+
 ## What it scans
 
 - Wherever you keep your code: SizeBerg walks your home folder for the first folders that hold git repositories, like `~/workspace` or `~/Documents/GitHub`, and scans each of them whole. A repository right in your home folder, like `~/dotfiles`, is an item of its own. It skips `~/Library`, hidden folders, media folders and dependency trees. `--root` scans given folders instead. If your repositories are in Documents, Desktop or Downloads, macOS asks once whether SizeBerg may read that folder.
