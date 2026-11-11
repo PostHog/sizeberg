@@ -30,6 +30,27 @@ enum ChangeLog {
         return CFUUIDCreateString(nil, uuid) as String?
     }
 
+    /// FSEvents gives up on a stream with thousands of roots, and every scan then reads everything again.
+    static let maxRoots = 256
+
+    /// The folders to ask FSEvents about, at most `maxRoots`. Many folders that share a parent, like
+    /// thousands of temp folders, are watched through that parent. A change beside them belongs to no
+    /// segment, so it costs an event and nothing else.
+    static func watchRoots(_ paths: [String]) -> [String] {
+        var roots = Set(paths)
+        while roots.count > maxRoots {
+            let byParent = Dictionary(grouping: roots) { ($0 as NSString).deletingLastPathComponent }
+            guard let busiest = byParent.max(by: { $0.value.count < $1.value.count }), busiest.value.count > 1 else { break }
+            roots.subtract(busiest.value)
+            roots.insert(busiest.key)
+        }
+        var result: [String] = []
+        for root in roots.sorted() where !result.contains(where: { root.hasPrefix($0 + "/") }) {
+            result.append(root)
+        }
+        return result
+    }
+
     /// Directories with changes below `roots` since `eventID`.
     /// Nil when the history is incomplete, so the caller must scan everything.
     static func changes(since eventID: UInt64, under roots: [String]) -> [Change]? {
