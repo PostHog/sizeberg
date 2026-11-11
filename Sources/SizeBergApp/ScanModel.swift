@@ -47,6 +47,7 @@ final class ScanModel {
 
     private(set) var report: Report?
     private(set) var isScanning = false
+    private(set) var isBackgroundScanning = false
     /// A full scan shows the live table over the old report, with the old numbers for comparison.
     private(set) var isFullScan = false
     /// Live totals of the running scan. Nil when no scan runs.
@@ -85,10 +86,10 @@ final class ScanModel {
         if ProcessInfo.processInfo.environment["SIZEBERG_SNAPSHOT"] != nil, snapshotScan != "rescan" {
             return
         }
-        // The last report opens at once, but folders change while the app is closed: rescan right away,
-        // and again on coming back to the app once the numbers are a few minutes old.
-        DispatchQueue.main.async { self.scan() }
-        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+        // The last report opens at once, but folders change while the window is closed: rescan when the
+        // window comes up and the numbers are a few minutes old. SizeBerg can run for days from the menu
+        // bar without a window, and a scan in this process would keep its memory, so nothing scans here until then.
+        NotificationCenter.default.addObserver(forName: NSWindow.didBecomeMainNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.rescanIfOld() }
         }
     }
@@ -96,13 +97,44 @@ final class ScanModel {
     static let freshFor: TimeInterval = 5 * 60
 
     private func rescanIfOld() {
-        guard let report, cleanup == nil, Date().timeIntervalSince(report.scannedAt) > Self.freshFor else { return }
+        guard cleanup == nil else { return }
+        if let report, Date().timeIntervalSince(report.scannedAt) <= Self.freshFor { return }
         scan()
     }
 
     /// A scan or a cleanup is running: scanning while folders are deleted would report a half state.
     var isBusy: Bool {
-        isScanning || cleanup?.phase == .running
+        isScanning || isBackgroundScanning || cleanup?.phase == .running
+    }
+
+    /// Scans in a separate low-priority process, which gives its memory back when it exits. Both write
+    /// the same cache, so this never runs next to a scan in the window.
+    func scanInBackground(then finished: @escaping @MainActor (Report) -> Void) {
+        guard !isBusy else { return }
+        isBackgroundScanning = true
+        Task {
+            await Task.detached(priority: .background) { Self.runScanHelper() }.value
+            isBackgroundScanning = false
+            guard let report = Report.loadCached() else { return }
+            finish(with: report)
+            finished(report)
+        }
+    }
+
+    private nonisolated static func runScanHelper() {
+        let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/sizeberg")
+        guard FileManager.default.isExecutableFile(atPath: helper.path) else {
+            // Run from `swift run`, without an app bundle.
+            try? Scanner().run().saveToCache()
+            return
+        }
+        let process = Process()
+        process.executableURL = helper
+        process.qualityOfService = .background
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return }
+        process.waitUntilExit()
     }
 
     func scan(full: Bool = false) {
