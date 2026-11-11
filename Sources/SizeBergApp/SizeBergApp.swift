@@ -23,7 +23,7 @@ struct SizeBergApp: App {
             MenuBarLabel(watcher: watcher)
                 .onAppear { appDelegate.watcher = watcher }
         }
-        .menuBarExtraStyle(.window)
+        .menuBarExtraStyle(.menu)
 
         // One window: every view shows the same scan, so a second window would only repeat it.
         Window("SizeBerg", id: "main") {
