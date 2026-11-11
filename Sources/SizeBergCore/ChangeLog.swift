@@ -40,9 +40,15 @@ enum ChangeLog {
         var roots = Set(paths)
         while roots.count > maxRoots {
             let byParent = Dictionary(grouping: roots) { ($0 as NSString).deletingLastPathComponent }
-            guard let busiest = byParent.max(by: { $0.value.count < $1.value.count }), busiest.value.count > 1 else { break }
-            roots.subtract(busiest.value)
-            roots.insert(busiest.key)
+            if let busiest = byParent.max(by: { $0.value.count < $1.value.count }), busiest.value.count > 1 {
+                roots.subtract(busiest.value)
+                roots.insert(busiest.key)
+                continue
+            }
+            // Every root has a parent of its own, so all of them move up a level until they meet.
+            let parents = Set(byParent.keys)
+            guard parents != roots else { break }
+            roots = parents
         }
         var result: [String] = []
         for root in roots.sorted() where !result.contains(where: { root.hasPrefix($0 + "/") }) {

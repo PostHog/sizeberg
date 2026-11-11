@@ -36,4 +36,14 @@ struct ChangeMappingTests {
         #expect(roots.contains("/Users/me/code/app"))
         #expect(paths.allSatisfy { path in roots.contains { path == $0 || path.hasPrefix($0 + "/") } })
     }
+
+    /// One scratch session per project: no two roots share a parent, and the limit must still hold.
+    @Test func foldersWithoutSiblingsStillStayUnderTheLimit() {
+        let paths = (0..<4_000).map { "/private/tmp/claude-501/-project\($0)/session" }
+
+        let roots = ChangeLog.watchRoots(paths)
+
+        #expect(roots.count <= ChangeLog.maxRoots)
+        #expect(paths.allSatisfy { path in roots.contains { path == $0 || path.hasPrefix($0 + "/") } })
+    }
 }

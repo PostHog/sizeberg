@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Rescans are incremental again. Since 0.1.8, thousands of temp folders made the change query fail, so every scan read everything.
+
 ## 0.1.8
 
 - New "Agent waste" filter for what coding agents and their tools leave outside checkouts. Each kind of waste is one row, with its items below it, the way a main checkout holds its worktrees:
